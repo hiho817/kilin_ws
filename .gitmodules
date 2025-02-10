@@ -1,0 +1,3 @@
+[submodule "grpc_core"]
+	path = grpc_core
+	url = git@github.com:hiho817/grpc_core.git
