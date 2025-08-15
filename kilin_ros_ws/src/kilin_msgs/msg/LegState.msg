@@ -1,0 +1,3 @@
+MotorState hip
+MotorState steering
+MotorState hub

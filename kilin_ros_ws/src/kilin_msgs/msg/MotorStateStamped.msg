@@ -1,5 +1,5 @@
 Headers header
-MotorState module_a
-MotorState module_b
-MotorState module_c
-MotorState module_d
+LegState module_a
+LegState module_b
+LegState module_c
+LegState module_d
