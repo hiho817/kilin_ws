@@ -45,7 +45,7 @@ void ros_motor_cmd_cb(const kilin_msgs::msg::MotorCmdStamped::SharedPtr msg)
 
   // Convert the ROS motor command into a gRPC motor command.
   // (Assuming each motor command contains four modules.)
-  std::vector<motor_msg::MotorCmd*> grpc_motor_modules = {
+  std::vector<motor_msg::LegCmd*> grpc_motor_modules = {
       grpc_motor_cmd.mutable_module_a(),
       grpc_motor_cmd.mutable_module_b(),
       grpc_motor_cmd.mutable_module_c(),
@@ -53,14 +53,14 @@ void ros_motor_cmd_cb(const kilin_msgs::msg::MotorCmdStamped::SharedPtr msg)
   };
 
   // Assume the ROS message has corresponding modules.
-  std::vector<kilin_msgs::msg::MotorCmd> ros_motor_modules = {
+  std::vector<kilin_msgs::msg::LegCmd> ros_motor_modules = {
       ros_motor_cmd.module_a,
       ros_motor_cmd.module_b,
       ros_motor_cmd.module_c,
       ros_motor_cmd.module_d
   };
-  
-  # TODO: Should be update with the new message structure.
+
+  //TODO: Should be update with the new message structure.
   // for (int i = 0; i < 4; ++i) {
   //   grpc_motor_modules[i]->set_theta(ros_motor_modules[i].theta);
   //   grpc_motor_modules[i]->set_beta(ros_motor_modules[i].beta);
@@ -93,21 +93,21 @@ void grpc_motor_state_cb(motor_msg::MotorStateStamped state)
   grpc_motor_state = state;  // Copy the incoming gRPC state
 
   // Convert each module's state.
-  std::vector<const motor_msg::MotorState*> grpc_motor_modules = {
+  std::vector<const motor_msg::LegState*> grpc_motor_modules = {
       &grpc_motor_state.module_a(),
       &grpc_motor_state.module_b(),
       &grpc_motor_state.module_c(),
       &grpc_motor_state.module_d()
   };
 
-  std::vector<kilin_msgs::msg::MotorState*> ros_motor_modules = {
+  std::vector<kilin_msgs::msg::LegState*> ros_motor_modules = {
       &ros_motor_state.module_a,
       &ros_motor_state.module_b,
       &ros_motor_state.module_c,
       &ros_motor_state.module_d
   };
 
-  # TODO: Should be update with the new message structure.
+  //TODO: Should be update with the new message structure.
   // for (int i = 0; i < 4; ++i) {
   //   ros_motor_modules[i]->theta      = grpc_motor_modules[i]->theta();
   //   ros_motor_modules[i]->beta       = grpc_motor_modules[i]->beta();
@@ -121,7 +121,7 @@ void grpc_motor_state_cb(motor_msg::MotorStateStamped state)
   // The ROS message header now uses .time, so assign accordingly.
   ros_motor_state.header.seq = grpc_motor_state.header().seq();
   ros_motor_state.header.time.sec = grpc_motor_state.header().stamp().sec();
-  (ros_motor_state.header.time.nanosec) * 1000 = grpc_motor_state.header().stamp().usec();
+  ros_motor_state.header.time.nanosec = grpc_motor_state.header().stamp().usec() * 1000;
 
   // Publish the converted motor state on the ROS topic.
   if (ros_motor_state_pub) {

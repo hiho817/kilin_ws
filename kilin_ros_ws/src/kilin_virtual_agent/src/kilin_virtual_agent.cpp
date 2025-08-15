@@ -18,34 +18,35 @@ motor_msg::MotorStateStamped       motor_state;
 void motor_cmd_cb(const motor_msg::MotorCmdStamped cmd) {
     std::lock_guard<std::mutex> lock(mutex_motor_state);
 
-    // Create vectors for conversion
-    std::vector<motor_msg::MotorState*> motor_states = {
+    // Create vectors for conversion - use auto to let compiler deduce the correct type
+    auto motor_states = std::vector<motor_msg::LegState*>{
         motor_state.mutable_module_a(),
         motor_state.mutable_module_b(),
         motor_state.mutable_module_c(),
         motor_state.mutable_module_d()
     };
 
-    std::vector<const motor_msg::MotorCmd*> motor_cmds = {
+    auto motor_cmds = std::vector<const motor_msg::LegCmd*>{
         &cmd.module_a(),
         &cmd.module_b(),
         &cmd.module_c(),
         &cmd.module_d()
     };
-
-    std::cout << "TB_A: (" << motor_cmds[0]->theta() << ", " << motor_cmds[0]->beta() << "); " << std::endl
-              << "TB_B: (" << motor_cmds[1]->theta() << ", " << motor_cmds[1]->beta() << "); " << std::endl
-              << "TB_C: (" << motor_cmds[2]->theta() << ", " << motor_cmds[2]->beta() << "); " << std::endl
-              << "TB_D: (" << motor_cmds[3]->theta() << ", " << motor_cmds[3]->beta() << "); " << std::endl << std::endl;
-
-    for (int i = 0; i < 4; i++) {
-        motor_states[i]->set_theta(motor_cmds[i]->theta());
-        motor_states[i]->set_beta(motor_cmds[i]->beta());
-        motor_states[i]->set_velocity_r(1);
-        motor_states[i]->set_velocity_l(1);
-        motor_states[i]->set_torque_r(1);
-        motor_states[i]->set_torque_l(1);
-    }
+    
+    //TODO: Should be update with the new message structure.
+    // std::cout << "TB_A: (" << motor_cmds[0]->theta() << ", " << motor_cmds[0]->beta() << "); " << std::endl
+    //           << "TB_B: (" << motor_cmds[1]->theta() << ", " << motor_cmds[1]->beta() << "); " << std::endl
+    //           << "TB_C: (" << motor_cmds[2]->theta() << ", " << motor_cmds[2]->beta() << "); " << std::endl
+    //           << "TB_D: (" << motor_cmds[3]->theta() << ", " << motor_cmds[3]->beta() << "); " << std::endl << std::endl;
+    //TODO: Should be update with the new message structure.
+    // for (int i = 0; i < 4; i++) {
+    //     motor_states[i]->set_theta(motor_cmds[i]->theta());
+    //     motor_states[i]->set_beta(motor_cmds[i]->beta());
+    //     motor_states[i]->set_velocity_r(1);
+    //     motor_states[i]->set_velocity_l(1);
+    //     motor_states[i]->set_torque_r(1);
+    //     motor_states[i]->set_torque_l(1);
+    // }
 
     // Get current time and update header (using 'time' field)
     timeval currentTime;

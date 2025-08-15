@@ -18,6 +18,8 @@ set(msg_files
   "msg/MotorCmdStamped.msg"
   "msg/MotorState.msg"
   "msg/MotorStateStamped.msg"
+  "msg/LegState.msg"
+  "msg/LegCmd.msg"
   "msg/TriggerStamped.msg"
 )
 
