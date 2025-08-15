@@ -8,7 +8,6 @@
 #include "NodeHandler.h"
 #include "Motor.pb.h"
 #include "Power.pb.h"
-#include "Steering.pb.h"
 
 // ROS messages (assumed to be generated in package kilin_msgs)
 #include "kilin_msgs/msg/motor_cmd_stamped.hpp"
@@ -60,16 +59,17 @@ void ros_motor_cmd_cb(const kilin_msgs::msg::MotorCmdStamped::SharedPtr msg)
       ros_motor_cmd.module_c,
       ros_motor_cmd.module_d
   };
-
-  for (int i = 0; i < 4; ++i) {
-    grpc_motor_modules[i]->set_theta(ros_motor_modules[i].theta);
-    grpc_motor_modules[i]->set_beta(ros_motor_modules[i].beta);
-    grpc_motor_modules[i]->set_kp(ros_motor_modules[i].kp);
-    grpc_motor_modules[i]->set_ki(ros_motor_modules[i].ki);
-    grpc_motor_modules[i]->set_kd(ros_motor_modules[i].kd);
-    grpc_motor_modules[i]->set_torque_r(ros_motor_modules[i].torque_r);
-    grpc_motor_modules[i]->set_torque_l(ros_motor_modules[i].torque_l);
-  }
+  
+  # TODO: Should be update with the new message structure.
+  // for (int i = 0; i < 4; ++i) {
+  //   grpc_motor_modules[i]->set_theta(ros_motor_modules[i].theta);
+  //   grpc_motor_modules[i]->set_beta(ros_motor_modules[i].beta);
+  //   grpc_motor_modules[i]->set_kp(ros_motor_modules[i].kp);
+  //   grpc_motor_modules[i]->set_ki(ros_motor_modules[i].ki);
+  //   grpc_motor_modules[i]->set_kd(ros_motor_modules[i].kd);
+  //   grpc_motor_modules[i]->set_torque_r(ros_motor_modules[i].torque_r);
+  //   grpc_motor_modules[i]->set_torque_l(ros_motor_modules[i].torque_l);
+  // }
 
   // Copy header information.
   // Now using header.time instead of header.stamp.
@@ -107,20 +107,21 @@ void grpc_motor_state_cb(motor_msg::MotorStateStamped state)
       &ros_motor_state.module_d
   };
 
-  for (int i = 0; i < 4; ++i) {
-    ros_motor_modules[i]->theta      = grpc_motor_modules[i]->theta();
-    ros_motor_modules[i]->beta       = grpc_motor_modules[i]->beta();
-    ros_motor_modules[i]->velocity_r = grpc_motor_modules[i]->velocity_r();
-    ros_motor_modules[i]->velocity_l = grpc_motor_modules[i]->velocity_l();
-    ros_motor_modules[i]->torque_r   = grpc_motor_modules[i]->torque_r();
-    ros_motor_modules[i]->torque_l   = grpc_motor_modules[i]->torque_l();
-  }
+  # TODO: Should be update with the new message structure.
+  // for (int i = 0; i < 4; ++i) {
+  //   ros_motor_modules[i]->theta      = grpc_motor_modules[i]->theta();
+  //   ros_motor_modules[i]->beta       = grpc_motor_modules[i]->beta();
+  //   ros_motor_modules[i]->velocity_r = grpc_motor_modules[i]->velocity_r();
+  //   ros_motor_modules[i]->velocity_l = grpc_motor_modules[i]->velocity_l();
+  //   ros_motor_modules[i]->torque_r   = grpc_motor_modules[i]->torque_r();
+  //   ros_motor_modules[i]->torque_l   = grpc_motor_modules[i]->torque_l();
+  // }
 
   // Copy header information.
   // The ROS message header now uses .time, so assign accordingly.
   ros_motor_state.header.seq = grpc_motor_state.header().seq();
   ros_motor_state.header.time.sec = grpc_motor_state.header().stamp().sec();
-  ros_motor_state.header.time.nanosec = grpc_motor_state.header().stamp().usec();
+  (ros_motor_state.header.time.nanosec) * 1000 = grpc_motor_state.header().stamp().usec();
 
   // Publish the converted motor state on the ROS topic.
   if (ros_motor_state_pub) {
