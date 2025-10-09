@@ -82,6 +82,7 @@ void ros_motor_cmd_cb(const kilin_msgs::msg::MotorCmdStamped::SharedPtr msg) {
         hip->set_ki(src.hip.ki);
         hip->set_kd(src.hip.kd);
         hip->set_torque(src.hip.torque);
+        hip->set_velocity(src.hip.velocity);
 
         // steering
         auto* steering = dst->mutable_steering();
@@ -90,6 +91,7 @@ void ros_motor_cmd_cb(const kilin_msgs::msg::MotorCmdStamped::SharedPtr msg) {
         steering->set_ki(src.steering.ki);
         steering->set_kd(src.steering.kd);
         steering->set_torque(src.steering.torque);
+        steering->set_velocity(src.steering.velocity);
 
         // hub
         auto* hub = dst->mutable_hub();
@@ -98,6 +100,7 @@ void ros_motor_cmd_cb(const kilin_msgs::msg::MotorCmdStamped::SharedPtr msg) {
         hub->set_ki(src.hub.ki);
         hub->set_kd(src.hub.kd);
         hub->set_torque(src.hub.torque);
+        hub->set_velocity(src.hub.velocity);
     }
 
     // Copy header information.

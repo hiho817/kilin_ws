@@ -8,11 +8,14 @@ add_executable(kilin_ros2_bridge kilin_ros2_bridge.cpp)
 
 add_executable(test_motor_cmd_pub test_motor_cmd_pub.cpp)
 
+add_executable(motor_cmd_pub_ui motor_cmd_pub_ui.cpp)
+
 
 
 
 ament_target_dependencies(kilin_ros2_bridge rclcpp std_msgs rosgraph_msgs geometry_msgs kilin_msgs)
 ament_target_dependencies(test_motor_cmd_pub rclcpp kilin_msgs)
+ament_target_dependencies(motor_cmd_pub_ui rclcpp kilin_msgs)
 
 target_include_directories(kilin_ros2_bridge PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -34,3 +37,5 @@ install(TARGETS kilin_ros2_bridge
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS test_motor_cmd_pub DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS motor_cmd_pub_ui  DESTINATION lib/${PROJECT_NAME})

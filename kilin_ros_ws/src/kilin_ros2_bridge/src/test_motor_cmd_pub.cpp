@@ -27,24 +27,24 @@ private:
         kilin_msgs::msg::LegCmd leg;
 
         // hip
-        leg.hip.position = 0.10;
-        leg.hip.kp       = 1.0;
-        leg.hip.ki       = 0.01;
-        leg.hip.kd       = 0.05;
+        leg.hip.position = 0.30;
+        leg.hip.kp       = 300.0;
+        leg.hip.ki       = 0.0;
+        leg.hip.kd       = 5.0;
         leg.hip.torque   = 0.2;
 
         // steering
         leg.steering.position = -0.20;
-        leg.steering.kp       = 0.8;
-        leg.steering.ki       = 0.02;
-        leg.steering.kd       = 0.04;
+        leg.steering.kp       = 0.0;
+        leg.steering.ki       = 0.0;
+        leg.steering.kd       = 0.0;
         leg.steering.torque   = 0.0;
 
         // hub
         leg.hub.position = 3.14;
-        leg.hub.kp       = 0.5;
-        leg.hub.ki       = 0.00;
-        leg.hub.kd       = 0.03;
+        leg.hub.kp       = 0.0;
+        leg.hub.ki       = 0.0;
+        leg.hub.kd       = 0.0;
         leg.hub.torque   = 1.0;
 
         // 四個模組先都塞同一組
