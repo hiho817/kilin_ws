@@ -4,3 +4,4 @@ float64 ki
 float64 kd
 float64 torque
 float64 velocity
+int32 motor_mode

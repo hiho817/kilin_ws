@@ -13,6 +13,8 @@
 #include "kilin_msgs/msg/motor_cmd_stamped.hpp"
 #include "kilin_msgs/msg/motor_state_stamped.hpp"
 #include "kilin_msgs/msg/trigger_stamped.hpp"
+#include "kilin_msgs/msg/power_cmd_stamped.hpp"
+#include "kilin_msgs/msg/power_state_stamped.hpp"
 #include "rosgraph_msgs/msg/clock.hpp"
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/twist.hpp"
@@ -20,20 +22,32 @@
 // Global mutexes for thread safety
 std::mutex mutex_ros_motor_state;
 std::mutex mutex_grpc_motor_cmd;
+std::mutex mutex_grpc_power_cmd;
+std::mutex mutex_ros_power_state;
 
 // Global ROS message objects
 kilin_msgs::msg::MotorCmdStamped   ros_motor_cmd;
 kilin_msgs::msg::MotorStateStamped ros_motor_state;
+kilin_msgs::msg::PowerCmdStamped   ros_power_cmd;
+kilin_msgs::msg::PowerStateStamped ros_power_state;
 
 // Global gRPC message objects
 motor_msg::MotorCmdStamped  grpc_motor_cmd;
 motor_msg::MotorStateStamped grpc_motor_state;
+power_msg::PowerCmdStamped  grpc_power_cmd;
+power_msg::PowerStateStamped grpc_power_state;
 
 // Global pointer to the gRPC publisher for motor commands
 core::Publisher<motor_msg::MotorCmdStamped>* grpc_motor_cmd_pub = nullptr;
 
 // Global ROS publisher for motor state messages
 rclcpp::Publisher<kilin_msgs::msg::MotorStateStamped>::SharedPtr ros_motor_state_pub = nullptr;
+
+// Global pointer to the gRPC publisher for power commands
+core::Publisher<power_msg::PowerCmdStamped>* grpc_power_cmd_pub = nullptr;
+
+// Global ROS publisher for power state messages
+rclcpp::Publisher<kilin_msgs::msg::PowerStateStamped>::SharedPtr ros_power_state_pub = nullptr;
 
 //
 // Callback: When a ROS motor command message is received, convert it to a gRPC message and publish via gRPC.
@@ -183,6 +197,70 @@ void grpc_motor_state_cb(motor_msg::MotorStateStamped state) {
     }
 }
 
+// Callback: When a ROS power command message is received, convert it to a gRPC message and publish via gRPC.
+void ros_power_cmd_cb(const kilin_msgs::msg::PowerCmdStamped::SharedPtr msg) {
+    std::lock_guard<std::mutex> lock(mutex_grpc_power_cmd);
+    ros_power_cmd = *msg;
+
+    RCLCPP_INFO(rclcpp::get_logger("ros2_bridge"),
+                "ROS->gRPC: got power cmd seq=%u", msg->header.seq);
+
+    // Header
+    grpc_power_cmd.mutable_header()->set_seq(ros_power_cmd.header.seq);
+    grpc_power_cmd.mutable_header()->mutable_stamp()->set_sec(ros_power_cmd.header.time.sec);
+    grpc_power_cmd.mutable_header()->mutable_stamp()->set_usec(ros_power_cmd.header.time.nanosec / 1000);
+
+    // Payload
+    grpc_power_cmd.set_digital(ros_power_cmd.digital);
+    grpc_power_cmd.set_signal(ros_power_cmd.signal);
+    grpc_power_cmd.set_power(ros_power_cmd.power);
+    grpc_power_cmd.set_clean(ros_power_cmd.clean);
+    grpc_power_cmd.set_trigger(ros_power_cmd.trigger);
+    grpc_power_cmd.set_steering_cali(ros_power_cmd.steering_cali);
+    grpc_power_cmd.set_robot_mode(static_cast<power_msg::ROBOTMODE>(ros_power_cmd.robot_mode));
+
+    // Publish via gRPC
+    if (grpc_power_cmd_pub != nullptr) {
+        grpc_power_cmd_pub->publish(grpc_power_cmd);
+    }
+}
+
+// Callback: When a gRPC power state message is received, convert it and publish it on the ROS topic.
+void grpc_power_state_cb(power_msg::PowerStateStamped m) {
+    std::lock_guard<std::mutex> lock(mutex_ros_power_state);
+    grpc_power_state = m;
+
+    // Header
+    ros_power_state.header.seq = m.header().seq();
+    ros_power_state.header.time.sec = m.header().stamp().sec();
+    ros_power_state.header.time.nanosec = m.header().stamp().usec() * 1000;
+
+    // Booleans
+    ros_power_state.digital = m.digital();
+    ros_power_state.signal = m.signal();
+    ros_power_state.power = m.power();
+    ros_power_state.clean = m.clean();
+    ros_power_state.robot_mode = static_cast<int32_t>(m.robot_mode());
+
+    // Voltages / Currents
+    ros_power_state.v_0 = m.v_0();  ros_power_state.i_0 = m.i_0();
+    ros_power_state.v_1 = m.v_1();  ros_power_state.i_1 = m.i_1();
+    ros_power_state.v_2 = m.v_2();  ros_power_state.i_2 = m.i_2();
+    ros_power_state.v_3 = m.v_3();  ros_power_state.i_3 = m.i_3();
+    ros_power_state.v_4 = m.v_4();  ros_power_state.i_4 = m.i_4();
+    ros_power_state.v_5 = m.v_5();  ros_power_state.i_5 = m.i_5();
+    ros_power_state.v_6 = m.v_6();  ros_power_state.i_6 = m.i_6();
+    ros_power_state.v_7 = m.v_7();  ros_power_state.i_7 = m.i_7();
+    ros_power_state.v_8 = m.v_8();  ros_power_state.i_8 = m.i_8();
+    ros_power_state.v_9 = m.v_9();  ros_power_state.i_9 = m.i_9();
+    ros_power_state.v_10 = m.v_10(); ros_power_state.i_10 = m.i_10();
+    ros_power_state.v_11 = m.v_11(); ros_power_state.i_11 = m.i_11();
+
+    if (ros_power_state_pub) {
+        ros_power_state_pub->publish(ros_power_state);
+    }
+}
+
 //
 // Main function
 //
@@ -197,9 +275,16 @@ int main(int argc, char * argv[]) {
     // Create a ROS 2 subscriber for motor command messages.
     auto ros_motor_cmd_sub = node->create_subscription<kilin_msgs::msg::MotorCmdStamped>(
         "motor/command", 10, ros_motor_cmd_cb);
+    
+    // Create a ROS 2 subscriber for power command messages.
+    auto ros_power_cmd_sub = node->create_subscription<kilin_msgs::msg::PowerCmdStamped>(
+        "power/command", 10, ros_power_cmd_cb);
 
     // Create a ROS 2 publisher for motor state messages.
     ros_motor_state_pub = node->create_publisher<kilin_msgs::msg::MotorStateStamped>("motor/state", 10);
+
+    // Create a ROS 2 publisher for power state messages.
+    ros_power_state_pub = node->create_publisher<kilin_msgs::msg::PowerStateStamped>("power/state", 10);
 
     // --- Set up the gRPC side ---
     // Create a NodeHandler for gRPC operations.
@@ -213,8 +298,15 @@ int main(int argc, char * argv[]) {
     auto &grpc_motor_state_sub = nh_.subscribe<motor_msg::MotorStateStamped>(
         "motor/state", 1000, grpc_motor_state_cb);
 
+    // Subscribe to gRPC power state messages.
+    auto &grpc_power_state_sub = nh_.subscribe<power_msg::PowerStateStamped>(
+        "power/state", 1000, grpc_power_state_cb);
+
     // Advertise the gRPC publisher for motor command messages.
     grpc_motor_cmd_pub = &(nh_.advertise<motor_msg::MotorCmdStamped>("motor/command"));
+    
+    // Advertise the gRPC publisher for power command messages.
+    grpc_power_cmd_pub = &(nh_.advertise<power_msg::PowerCmdStamped>("power/command"));
 
     // Main loop: process both ROS 2 and gRPC events.
     rclcpp::WallRate loop_rate(1000);  // 1000 Hz loop rate
