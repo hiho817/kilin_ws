@@ -97,6 +97,7 @@ void ros_motor_cmd_cb(const kilin_msgs::msg::MotorCmdStamped::SharedPtr msg) {
         hip->set_kd(src.hip.kd);
         hip->set_torque(src.hip.torque);
         hip->set_velocity(src.hip.velocity);
+        hip->set_motor_mode(static_cast<motor_msg::MOTORMODE>(src.hip.motor_mode));
 
         // steering
         auto* steering = dst->mutable_steering();
@@ -106,6 +107,7 @@ void ros_motor_cmd_cb(const kilin_msgs::msg::MotorCmdStamped::SharedPtr msg) {
         steering->set_kd(src.steering.kd);
         steering->set_torque(src.steering.torque);
         steering->set_velocity(src.steering.velocity);
+        steering->set_motor_mode(static_cast<motor_msg::MOTORMODE>(src.steering.motor_mode));
 
         // hub
         auto* hub = dst->mutable_hub();
@@ -115,6 +117,7 @@ void ros_motor_cmd_cb(const kilin_msgs::msg::MotorCmdStamped::SharedPtr msg) {
         hub->set_kd(src.hub.kd);
         hub->set_torque(src.hub.torque);
         hub->set_velocity(src.hub.velocity);
+        hub->set_motor_mode(static_cast<motor_msg::MOTORMODE>(src.hub.motor_mode));
     }
 
     // Copy header information.
@@ -169,16 +172,19 @@ void grpc_motor_state_cb(motor_msg::MotorStateStamped state) {
         dst->hip.position = src->hip().position();
         dst->hip.velocity = src->hip().velocity();
         dst->hip.torque   = src->hip().torque();
+        dst->hip.motor_mode = static_cast<int32_t>(src->hip().motor_mode());
 
         // steering
         dst->steering.position = src->steering().position();
         dst->steering.velocity = src->steering().velocity();
         dst->steering.torque   = src->steering().torque();
+        dst->steering.motor_mode = static_cast<int32_t>(src->steering().motor_mode());
 
         // hub
         dst->hub.position = src->hub().position();
         dst->hub.velocity = src->hub().velocity();
         dst->hub.torque   = src->hub().torque();
+        dst->hub.motor_mode = static_cast<int32_t>(src->hub().motor_mode());
     }
 
     // Copy header information.
@@ -217,7 +223,6 @@ void ros_power_cmd_cb(const kilin_msgs::msg::PowerCmdStamped::SharedPtr msg) {
     grpc_power_cmd.set_clean(ros_power_cmd.clean);
     grpc_power_cmd.set_trigger(ros_power_cmd.trigger);
     grpc_power_cmd.set_steering_cali(ros_power_cmd.steering_cali);
-    grpc_power_cmd.set_robot_mode(static_cast<power_msg::ROBOTMODE>(ros_power_cmd.robot_mode));
 
     // Publish via gRPC
     if (grpc_power_cmd_pub != nullptr) {
@@ -240,7 +245,6 @@ void grpc_power_state_cb(power_msg::PowerStateStamped m) {
     ros_power_state.signal = m.signal();
     ros_power_state.power = m.power();
     ros_power_state.clean = m.clean();
-    ros_power_state.robot_mode = static_cast<int32_t>(m.robot_mode());
 
     // Voltages / Currents
     ros_power_state.v_0 = m.v_0();  ros_power_state.i_0 = m.i_0();

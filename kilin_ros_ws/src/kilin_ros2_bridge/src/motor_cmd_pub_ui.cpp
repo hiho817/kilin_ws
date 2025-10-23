@@ -1,6 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include "kilin_msgs/msg/motor_cmd_stamped.hpp"
 #include "kilin_msgs/msg/leg_cmd.hpp"
+#include "Motor.pb.h"  // for motor_msg::MOTORMODE enum
 
 #include <sstream>
 #include <string>
@@ -37,14 +38,30 @@ LegCmd* getModule(char module_char)
     }
 }
 
+motor_msg::MOTORMODE parseMotorMode(char mode_char)
+{
+    switch (toupper(mode_char))
+    {
+        case 'R': return motor_msg::REST_MODE;
+        case 'C': return motor_msg::CONFIG_MODE;
+        case 'S': return motor_msg::SET_ZERO;
+        case 'H': return motor_msg::HALL_CALIBRATE;
+        case 'P': return motor_msg::POSITION_MODE;
+        case 'V': return motor_msg::VELOCITY_MODE;
+        case 'T': return motor_msg::TORQUE_MODE;
+        default:  return motor_msg::REST_MODE;
+    }
+}
+
 void printHelp()
 {
-    std::cout << "Usage:\n";
-    std::cout << "  SET <Module A-D> <Motor HIP|STREEING|HUB> <Pos> <Kp> <Ki> <Kd> <Torque> <Velocity>\n";
-    std::cout << "  Example: SET A HIP 1.0 20.0 0.1 0.2 3.0 0.5\n";
-    std::cout << "  Type SEND to publish current config\n";
-    std::cout << "  Type SHOW to view current config\n";
-    std::cout << "  Type EXIT to quit\n";
+    std::cout << "\nUsage:\n";
+    std::cout << "  SET <Module A-D> <Motor HIP|STEERING|HUB> <Pos> <Kp> <Ki> <Kd> <Torque> <Velocity>\n";
+    std::cout << "  MODE <Module A-D> <Motor HIP|STEERING|HUB> <R|P|V|T|H|C>\n";
+    std::cout << "  SEND - Publish current command\n";
+    std::cout << "  SHOW - Show current config\n";
+    std::cout << "  HELP - Show usage\n";
+    std::cout << "  EXIT - Quit program\n";
 }
 
 void printMotorCmd(const std::string& label, const MotorCmd& m)
@@ -55,7 +72,8 @@ void printMotorCmd(const std::string& label, const MotorCmd& m)
               << ", ki: " << m.ki
               << ", kd: " << m.kd
               << ", torque: " << m.torque
-              << ", velocity: " << m.velocity << "\n";
+              << ", velocity: " << m.velocity
+              << ", mode: " << m.motor_mode << "\n";
 }
 
 void showCurrentConfig()
@@ -63,22 +81,22 @@ void showCurrentConfig()
     std::cout << "\n--- Current Command Configuration ---\n";
     std::cout << "[Module A]\n";
     printMotorCmd("HIP", leg_a.hip);
-    printMotorCmd("STREEING", leg_a.steering);
+    printMotorCmd("STEERING", leg_a.steering);
     printMotorCmd("HUB", leg_a.hub);
 
     std::cout << "[Module B]\n";
     printMotorCmd("HIP", leg_b.hip);
-    printMotorCmd("STREEING", leg_b.steering);
+    printMotorCmd("STEERING", leg_b.steering);
     printMotorCmd("HUB", leg_b.hub);
 
     std::cout << "[Module C]\n";
     printMotorCmd("HIP", leg_c.hip);
-    printMotorCmd("STREEING", leg_c.steering);
+    printMotorCmd("STEERING", leg_c.steering);
     printMotorCmd("HUB", leg_c.hub);
 
     std::cout << "[Module D]\n";
     printMotorCmd("HIP", leg_d.hip);
-    printMotorCmd("STREEING", leg_d.steering);
+    printMotorCmd("STEERING", leg_d.steering);
     printMotorCmd("HUB", leg_d.hub);
     std::cout << "--------------------------------------\n";
 }
@@ -128,7 +146,7 @@ int main(int argc, char **argv)
 
             auto* motor = getMotor(*leg, motor_name);
             if (!motor) {
-                std::cout << "Invalid motor name. Use HIP, STREEING, or HUB.\n";
+                std::cout << "Invalid motor name. Use HIP, STEERING, or HUB.\n";
                 continue;
             }
 
@@ -142,6 +160,30 @@ int main(int argc, char **argv)
             std::cout << "Updated " << (char)toupper(module_char) << " " << motor_name
                       << " to pos=" << pos << ", kp=" << kp << ", ki=" << ki
                       << ", kd=" << kd << ", torque=" << torque << ", velocity=" << velocity << "\n";
+        } else if (cmd == "MODE") {
+            char module_char;
+            std::string motor_name;
+            char mode_char;
+            if (!(iss >> module_char >> motor_name >> mode_char)) {
+                std::cout << "Invalid format. Use: MODE A HIP P\n";
+                continue;
+            }
+
+            auto* leg = getModule(module_char);
+            if (!leg) {
+                std::cout << "Invalid module. Use A, B, C, or D.\n";
+                continue;
+            }
+
+            auto* motor = getMotor(*leg, motor_name);
+            if (!motor) {
+                std::cout << "Invalid motor name. Use HIP, STEERING, or HUB.\n";
+                continue;
+            }
+
+            motor->motor_mode = static_cast<int32_t>(parseMotorMode(mode_char));
+            std::cout << "Set " << (char)toupper(module_char) << " " << motor_name
+                      << " mode = " << static_cast<int32_t>(motor->motor_mode) << "\n";
         } else if (cmd == "SEND") {
             MotorCmdStamped msg;
             msg.header.seq = seq++;
