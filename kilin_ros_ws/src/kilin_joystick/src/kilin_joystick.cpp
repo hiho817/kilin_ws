@@ -49,6 +49,12 @@ private:
         geometry_msgs::msg::Twist twist;
         twist.linear.x = vx * Vmax;
         twist.linear.y = vy * Vmax;
+        if (vy != 0.0) {
+            twist.linear.x *= std::sqrt(1 - std::fabs(vy)); // Adjust for diagonal speed
+        }
+        if (vx != 0.0) {
+            twist.linear.y *= std::sqrt(1 - std::fabs(vx)); // Adjust for diagonal speed
+        }
         twist.angular.z = omega * Wmax;
 
         cmd_pub->publish(twist);
