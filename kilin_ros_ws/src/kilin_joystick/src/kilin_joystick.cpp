@@ -43,18 +43,20 @@ private:
         if (std::fabs(vy) < deadzone) vy = 0.0;
         if (std::fabs(omega) < deadzone) omega = 0.0;
 
+        double norm = std::sqrt(vx * vx + vy * vy);
+        if (norm > 1e-6){
+            if (norm > 1.0) {
+                vx /= norm;
+                vy /= norm;
+            }
+        }
+
         // ------------------------------------------
         // Publish Twist message
         // ------------------------------------------
         geometry_msgs::msg::Twist twist;
         twist.linear.x = vx * Vmax;
         twist.linear.y = vy * Vmax;
-        if (vy != 0.0) {
-            twist.linear.x *= std::sqrt(1 - std::fabs(vy)); // Adjust for diagonal speed
-        }
-        if (vx != 0.0) {
-            twist.linear.y *= std::sqrt(1 - std::fabs(vx)); // Adjust for diagonal speed
-        }
         twist.angular.z = omega * Wmax;
 
         cmd_pub->publish(twist);
