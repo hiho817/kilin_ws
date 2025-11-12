@@ -40,8 +40,8 @@
    <widget class="QComboBox" name="comboBox_hip_mode">
     <property name="geometry">
      <rect>
-      <x>10</x>
-      <y>50</y>
+      <x>30</x>
+      <y>30</y>
       <width>111</width>
       <height>25</height>
      </rect>
@@ -323,7 +323,7 @@
    <widget class="QLabel" name="label_hip_kp">
     <property name="geometry">
      <rect>
-      <x>150</x>
+      <x>160</x>
       <y>20</y>
       <width>21</width>
       <height>17</height>
@@ -341,7 +341,7 @@
    <widget class="QLabel" name="label_hip_ki">
     <property name="geometry">
      <rect>
-      <x>150</x>
+      <x>160</x>
       <y>50</y>
       <width>21</width>
       <height>17</height>
@@ -359,7 +359,7 @@
    <widget class="QLabel" name="label_hip_kd">
     <property name="geometry">
      <rect>
-      <x>150</x>
+      <x>160</x>
       <y>80</y>
       <width>21</width>
       <height>17</height>
@@ -372,6 +372,81 @@
     </property>
     <property name="text">
      <string>Kd</string>
+    </property>
+   </widget>
+   <widget class="QLabel" name="label_hip_mode_cmd">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>30</y>
+      <width>31</width>
+      <height>17</height>
+     </rect>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>10</pointsize>
+     </font>
+    </property>
+    <property name="text">
+     <string>C</string>
+    </property>
+   </widget>
+   <widget class="QLabel" name="label_hip_mode_state">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>70</y>
+      <width>31</width>
+      <height>17</height>
+     </rect>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>10</pointsize>
+     </font>
+    </property>
+    <property name="text">
+     <string>S</string>
+    </property>
+   </widget>
+   <widget class="QTextBrowser" name="text_hip_mode_state">
+    <property name="geometry">
+     <rect>
+      <x>30</x>
+      <y>70</y>
+      <width>111</width>
+      <height>25</height>
+     </rect>
+    </property>
+    <property name="minimumSize">
+     <size>
+      <width>111</width>
+      <height>25</height>
+     </size>
+    </property>
+    <property name="maximumSize">
+     <size>
+      <width>111</width>
+      <height>25</height>
+     </size>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>11</pointsize>
+     </font>
+    </property>
+    <property name="styleSheet">
+     <string notr="true"/>
+    </property>
+    <property name="verticalScrollBarPolicy">
+     <enum>Qt::ScrollBarAlwaysOff</enum>
+    </property>
+    <property name="horizontalScrollBarPolicy">
+     <enum>Qt::ScrollBarAsNeeded</enum>
+    </property>
+    <property name="lineWrapMode">
+     <enum>QTextEdit::WidgetWidth</enum>
     </property>
    </widget>
   </widget>
@@ -426,8 +501,8 @@
    <widget class="QComboBox" name="comboBox_steering_mode">
     <property name="geometry">
      <rect>
-      <x>10</x>
-      <y>50</y>
+      <x>30</x>
+      <y>30</y>
       <width>111</width>
       <height>25</height>
      </rect>
@@ -709,7 +784,7 @@
    <widget class="QLabel" name="label_steering_kp">
     <property name="geometry">
      <rect>
-      <x>150</x>
+      <x>160</x>
       <y>20</y>
       <width>21</width>
       <height>17</height>
@@ -727,7 +802,7 @@
    <widget class="QLabel" name="label_steering_ki">
     <property name="geometry">
      <rect>
-      <x>150</x>
+      <x>160</x>
       <y>50</y>
       <width>21</width>
       <height>17</height>
@@ -745,7 +820,7 @@
    <widget class="QLabel" name="label_steering_kd">
     <property name="geometry">
      <rect>
-      <x>150</x>
+      <x>160</x>
       <y>80</y>
       <width>21</width>
       <height>17</height>
@@ -758,6 +833,81 @@
     </property>
     <property name="text">
      <string>Kd</string>
+    </property>
+   </widget>
+   <widget class="QLabel" name="label_steering_mode_state">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>70</y>
+      <width>31</width>
+      <height>17</height>
+     </rect>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>10</pointsize>
+     </font>
+    </property>
+    <property name="text">
+     <string>S</string>
+    </property>
+   </widget>
+   <widget class="QLabel" name="label_steering_mode_cmd">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>30</y>
+      <width>31</width>
+      <height>17</height>
+     </rect>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>10</pointsize>
+     </font>
+    </property>
+    <property name="text">
+     <string>C</string>
+    </property>
+   </widget>
+   <widget class="QTextBrowser" name="text_steering_mode_state">
+    <property name="geometry">
+     <rect>
+      <x>30</x>
+      <y>70</y>
+      <width>111</width>
+      <height>25</height>
+     </rect>
+    </property>
+    <property name="minimumSize">
+     <size>
+      <width>111</width>
+      <height>25</height>
+     </size>
+    </property>
+    <property name="maximumSize">
+     <size>
+      <width>111</width>
+      <height>25</height>
+     </size>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>11</pointsize>
+     </font>
+    </property>
+    <property name="styleSheet">
+     <string notr="true"/>
+    </property>
+    <property name="verticalScrollBarPolicy">
+     <enum>Qt::ScrollBarAlwaysOff</enum>
+    </property>
+    <property name="horizontalScrollBarPolicy">
+     <enum>Qt::ScrollBarAsNeeded</enum>
+    </property>
+    <property name="lineWrapMode">
+     <enum>QTextEdit::WidgetWidth</enum>
     </property>
    </widget>
   </widget>
@@ -776,8 +926,8 @@
    <widget class="QComboBox" name="comboBox_hub_mode">
     <property name="geometry">
      <rect>
-      <x>10</x>
-      <y>50</y>
+      <x>30</x>
+      <y>30</y>
       <width>111</width>
       <height>25</height>
      </rect>
@@ -1059,7 +1209,7 @@
    <widget class="QLabel" name="label_hub_kp">
     <property name="geometry">
      <rect>
-      <x>150</x>
+      <x>160</x>
       <y>20</y>
       <width>21</width>
       <height>17</height>
@@ -1077,7 +1227,7 @@
    <widget class="QLabel" name="label_hub_ki">
     <property name="geometry">
      <rect>
-      <x>150</x>
+      <x>160</x>
       <y>50</y>
       <width>21</width>
       <height>17</height>
@@ -1095,7 +1245,7 @@
    <widget class="QLabel" name="label_hub_kd">
     <property name="geometry">
      <rect>
-      <x>150</x>
+      <x>160</x>
       <y>80</y>
       <width>21</width>
       <height>17</height>
@@ -1108,6 +1258,81 @@
     </property>
     <property name="text">
      <string>Kd</string>
+    </property>
+   </widget>
+   <widget class="QLabel" name="label_steering_mode_cmd_2">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>30</y>
+      <width>31</width>
+      <height>17</height>
+     </rect>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>10</pointsize>
+     </font>
+    </property>
+    <property name="text">
+     <string>C</string>
+    </property>
+   </widget>
+   <widget class="QLabel" name="label_steering_mode_state_2">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>70</y>
+      <width>31</width>
+      <height>17</height>
+     </rect>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>10</pointsize>
+     </font>
+    </property>
+    <property name="text">
+     <string>S</string>
+    </property>
+   </widget>
+   <widget class="QTextBrowser" name="text_hub_mode_state">
+    <property name="geometry">
+     <rect>
+      <x>30</x>
+      <y>70</y>
+      <width>111</width>
+      <height>25</height>
+     </rect>
+    </property>
+    <property name="minimumSize">
+     <size>
+      <width>111</width>
+      <height>25</height>
+     </size>
+    </property>
+    <property name="maximumSize">
+     <size>
+      <width>111</width>
+      <height>25</height>
+     </size>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>11</pointsize>
+     </font>
+    </property>
+    <property name="styleSheet">
+     <string notr="true"/>
+    </property>
+    <property name="verticalScrollBarPolicy">
+     <enum>Qt::ScrollBarAlwaysOff</enum>
+    </property>
+    <property name="horizontalScrollBarPolicy">
+     <enum>Qt::ScrollBarAsNeeded</enum>
+    </property>
+    <property name="lineWrapMode">
+     <enum>QTextEdit::WidgetWidth</enum>
     </property>
    </widget>
   </widget>

@@ -81,9 +81,9 @@ class MotorNode(Node):
                 [msg.module_a, msg.module_b, msg.module_c, msg.module_d]
             ):
                 modules_state[mod_name] = {
-                    "hip": (leg.hip.position, leg.hip.velocity, leg.hip.torque),
-                    "steering": (leg.steering.position, leg.steering.velocity, leg.steering.torque),
-                    "hub": (leg.hub.position, leg.hub.velocity, leg.hub.torque),
+                    "hip": (leg.hip.position, leg.hip.velocity, leg.hip.torque, leg.hip.motor_mode),
+                    "steering": (leg.steering.position, leg.steering.velocity, leg.steering.torque, leg.steering.motor_mode),
+                    "hub": (leg.hub.position, leg.hub.velocity, leg.hub.torque, leg.hub.motor_mode),
                 }
 
             QtWidgets.QApplication.postEvent(

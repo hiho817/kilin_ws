@@ -61,11 +61,18 @@ class ModulePanel(QtWidgets.QWidget, Ui_Form):
         }
 
     # Update displayed state values (from ROS feedback)
-    def update_motor_state(self, name, pos, vel, tor):
+    def update_motor_state(self, name, pos, vel, tor, mode=None):
         pos_deg = math.degrees(pos)
         getattr(self, f"text_{name}_pos_state").setText(f"{pos_deg:.5f}")
         getattr(self, f"text_{name}_vel_state").setText(f"{vel:.5f}")
         getattr(self, f"text_{name}_tor_state").setText(f"{tor:.5f}")
+        if mode is not None:
+            mode_map = {
+                0: "Rest", 1: "Config", 2: "Set Zero",
+                3: "HAL Calibrate", 4: "Position Mode",
+                5: "Velocity Mode", 6: "Torque Mode"
+            }
+            getattr(self, f"text_{name}_mode_state").setText(mode_map.get(mode, str(mode)))
 
     # Helper: safely convert text to float
     def _safe_float(self, widget_name):

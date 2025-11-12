@@ -3,12 +3,14 @@ from mainwindow import Ui_MainWindow
 from module_widget import ModulePanel
 from power_node import PowerNode, VoltageUpdateEvent
 from motor_node import MotorNode, MotorStateUpdateEvent
+from kilin_msgs.msg import MotorCmdStamped
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
 from threading import Thread
 import signal
 import sys
 import time
+import math
 
 
 class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
@@ -32,6 +34,16 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         self.executor_thread.start()
 
         # -------------------------------------------------------------
+        # Additional ROS interfaces for command forwarding
+        # -------------------------------------------------------------
+        self.node_ui = rclpy.create_node("kilin_panel_ui")
+        self.pub_motor_cmd = self.node_ui.create_publisher(MotorCmdStamped, "/kilin/motor_cmd", 10)
+        self.sub_converter = self.node_ui.create_subscription(
+            MotorCmdStamped, "/kilin/motor_cmd_raw", self.converter_callback, 10
+        )
+        self.executor.add_node(self.node_ui)
+
+        # -------------------------------------------------------------
         # Insert module widgets
         # -------------------------------------------------------------
         self.module_a = ModulePanel("A")
@@ -51,6 +63,14 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         self.power_on = False
 
         # -------------------------------------------------------------
+        # Control mode selection (UI / Manual)
+        # -------------------------------------------------------------
+        self.comboBox_input.currentTextChanged.connect(self.on_mode_changed)
+        self.current_mode = self.comboBox_input.currentText()  # "UI" or "Manual"
+        # Set initial editability based on current mode from UI file
+        self.set_manual_editable(self.current_mode == "UI")
+
+        # -------------------------------------------------------------
         # Button connections
         # -------------------------------------------------------------
         self.btn_digital.clicked.connect(lambda: self.handle_toggle("digital"))
@@ -62,6 +82,102 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         self.btn_setzero.clicked.connect(lambda: self.set_all_motor_mode("Set Zero"))
 
         self.update_button_states()
+
+        self.node_ui.get_logger().info(f"KilinPanel initialized (mode={self.current_mode})")
+
+    # -------------------------------------------------------------
+    # Mode switching and converter forwarding
+    # -------------------------------------------------------------
+    def on_mode_changed(self, mode):
+        """Triggered when ComboBox changes."""
+        self.current_mode = mode
+        self.node_ui.get_logger().info(f"[UI] Control mode switched to: {mode}")
+
+        # Safety: send zero command on mode switch to stop motors immediately
+        zero_cmd = MotorCmdStamped()
+        now = self.node_ui.get_clock().now().to_msg()
+        # header compatibility: use .stamp if available in your message
+        try:
+            zero_cmd.header.stamp = now  # preferred field name in ROS2 std_msgs/Header
+        except Exception:
+            # fallback for custom header fields (if using time.sec/nanosec)
+            pass
+        zero_cmd.header.frame_id = f"mode_switch_{mode.lower()}"
+        self.pub_motor_cmd.publish(zero_cmd)
+        self.node_ui.get_logger().warn(f"[UI] Sent zero command on mode switch → {mode}")
+
+        # Toggle input editability (Manual: read-only & gray; UI: editable & white)
+        self.set_manual_editable(mode == "UI")
+
+    def converter_callback(self, msg: MotorCmdStamped):
+        """Forward converter output and update UI when in Manual mode."""
+        if self.current_mode == "Manual":
+            # Forward to bridge
+            self.pub_motor_cmd.publish(msg)
+            # Mirror values into UI input fields
+            self.update_ui_from_motorcmd(msg)
+            self.node_ui.get_logger().debug("Forwarded motor_cmd_raw → motor_cmd & updated UI")
+
+    def update_ui_from_motorcmd(self, msg: MotorCmdStamped):
+        """Update all module input fields to reflect MotorCmdStamped (Manual mode visual)."""
+        try:
+            modules = {
+                "A": msg.module_a,
+                "B": msg.module_b,
+                "C": msg.module_c,
+                "D": msg.module_d,
+            }
+
+            for name, leg in modules.items():
+                panel = getattr(self, f"module_{name.lower()}", None)
+                if not panel:
+                    continue
+
+                # --- Hip ---
+                hip_pos_deg = math.degrees(getattr(leg.hip, 'position', 0.0))
+                panel.lineEdit_hip_pos_cmd.setText(f"{hip_pos_deg:.3f}")
+                panel.lineEdit_hip_vel_cmd.setText(f"{getattr(leg.hip, 'velocity', 0.0):.3f}")
+                panel.lineEdit_hip_tor_cmd.setText(f"{getattr(leg.hip, 'torque', 0.0):.3f}")
+                panel.lineEdit_hip_kp.setText(f"{getattr(leg.hip, 'kp', 0.0):.2f}")
+                panel.lineEdit_hip_ki.setText(f"{getattr(leg.hip, 'ki', 0.0):.2f}")
+                panel.lineEdit_hip_kd.setText(f"{getattr(leg.hip, 'kd', 0.0):.2f}")
+
+                # --- Steering ---
+                steering_pos_deg = math.degrees(getattr(leg.steering, 'position', 0.0))
+                panel.lineEdit_steering_pos_cmd.setText(f"{steering_pos_deg:.3f}")
+                panel.lineEdit_steering_vel_cmd.setText(f"{getattr(leg.steering, 'velocity', 0.0):.3f}")
+                panel.lineEdit_steering_tor_cmd.setText(f"{getattr(leg.steering, 'torque', 0.0):.3f}")
+                panel.lineEdit_steering_kp.setText(f"{getattr(leg.steering, 'kp', 0.0):.2f}")
+                panel.lineEdit_steering_ki.setText(f"{getattr(leg.steering, 'ki', 0.0):.2f}")
+                panel.lineEdit_steering_kd.setText(f"{getattr(leg.steering, 'kd', 0.0):.2f}")
+
+                # --- Hub ---
+                hub_pos_deg = math.degrees(getattr(leg.hub, 'position', 0.0))
+                panel.lineEdit_hub_pos_cmd.setText(f"{hub_pos_deg:.3f}")
+                panel.lineEdit_hub_vel_cmd.setText(f"{getattr(leg.hub, 'velocity', 0.0):.3f}")
+                panel.lineEdit_hub_tor_cmd.setText(f"{getattr(leg.hub, 'torque', 0.0):.3f}")
+                panel.lineEdit_hub_kp.setText(f"{getattr(leg.hub, 'kp', 0.0):.2f}")
+                panel.lineEdit_hub_ki.setText(f"{getattr(leg.hub, 'ki', 0.0):.2f}")
+                panel.lineEdit_hub_kd.setText(f"{getattr(leg.hub, 'kd', 0.0):.2f}")
+
+        except Exception as e:
+            self.node_ui.get_logger().error(f"UI update error: {e}")
+
+    def set_manual_editable(self, enabled: bool):
+        """
+        Enable/disable all input fields in ModulePanels.
+        When disabled (Manual mode), fields are read-only and gray.
+        """
+        panels = [self.module_a, self.module_b, self.module_c, self.module_d]
+        for panel in panels:
+            for name in ["hip", "steering", "hub"]:
+                for suffix in ["kp", "ki", "kd", "pos_cmd", "vel_cmd", "tor_cmd"]:
+                    widget = getattr(panel, f"lineEdit_{name}_{suffix}", None)
+                    if widget:
+                        widget.setReadOnly(not enabled)
+                        color = "#ffffff" if enabled else "#e0e0e0"
+                        # Keep styling minimal to avoid overriding other styles
+                        widget.setStyleSheet(f"background-color: {color};")
 
     # -------------------------------------------------------------
     # Insert module widget
@@ -127,6 +243,7 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         self.btn_digital.setEnabled(True)
 
     def stop_all(self):
+        """Emergency stop: turn off all power and LEDs."""
         self.digital_on = False
         self.signal_on = False
         self.power_on = False
@@ -140,13 +257,20 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
     # Motor command handling
     # -------------------------------------------------------------
     def handle_send(self):
-        modules = {
-            "A": self.module_a,
-            "B": self.module_b,
-            "C": self.module_c,
-            "D": self.module_d,
-        }
-        self.motor_node.publish_motor_command(modules)
+        """Triggered when Send button pressed."""
+        if self.current_mode == "UI":
+            modules = {
+                "A": self.module_a,
+                "B": self.module_b,
+                "C": self.module_c,
+                "D": self.module_d,
+            }
+            self.motor_node.publish_motor_command(modules)
+            self.node_ui.get_logger().info("[UI] Published manual /kilin/motor_cmd")
+        else:
+            self.node_ui.get_logger().warn(
+                "[UI] Manual send disabled in Manual mode (converter active)"
+            )
 
     def set_all_motor_mode(self, mode_name: str):
         """Set all motor comboboxes to given mode and publish motor command."""
@@ -167,8 +291,8 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
             for module_name, joints in event.modules_state.items():
                 module_panel = getattr(self, f"module_{module_name.lower()}", None)
                 if module_panel:
-                    for joint_name, (pos, vel, tor) in joints.items():
-                        module_panel.update_motor_state(joint_name, pos, vel, tor)
+                    for joint_name, (pos, vel, tor, mode) in joints.items():
+                        module_panel.update_motor_state(joint_name, pos, vel, tor, mode)
 
         elif isinstance(event, VoltageUpdateEvent):
             self.text_voltage_display.setText(f"{event.voltage:.5f} V")
@@ -184,7 +308,7 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
 
         print("\n[Panel] Cleaning up resources...")
 
-        time.sleep(0.5) 
+        time.sleep(0.5)
 
         try:
             self.executor.shutdown()
@@ -194,6 +318,7 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         try:
             self.power_node.destroy_node()
             self.motor_node.destroy_node()
+            self.node_ui.destroy_node()  # Destroy additional UI node
         except Exception as e:
             print(f"[Panel] Node destroy error: {e}")
 

@@ -5,6 +5,8 @@
 #include "kilin_msgs/msg/motor_cmd.hpp"
 #include <cmath>
 #include <map>
+#include <csignal>
+#include <thread>
 
 struct ModulePos {
     double Xi; // [m]
@@ -24,10 +26,10 @@ public:
         wmax   = declare_parameter<double>("wmax", 2.0);        // max angular velocity
 
         // Module layout (A: FL, B: FR, C: RL, D: RR)
-        modules["A"] = { +0.5 * L_base, +0.5 * W_base }; // Front Left
-        modules["B"] = { +0.5 * L_base, -0.5 * W_base }; // Front Right
-        modules["C"] = { -0.5 * L_base, +0.5 * W_base }; // Rear Left
-        modules["D"] = { -0.5 * L_base, -0.5 * W_base }; // Rear Right
+        modules["A"] = { +0.5 * L_base, +0.5 * W_base };
+        modules["B"] = { +0.5 * L_base, -0.5 * W_base };
+        modules["C"] = { -0.5 * L_base, +0.5 * W_base };
+        modules["D"] = { -0.5 * L_base, -0.5 * W_base };
 
         // -------------------------------
         // ROS interfaces
@@ -37,13 +39,30 @@ public:
             std::bind(&KilinCmdConverter::cmdVelCallback, this, std::placeholders::_1));
 
         // Publish to UI instead of bridge
-        // Topic: /kilin/motor_cmd_raw
         pub_motor = create_publisher<kilin_msgs::msg::MotorCmdStamped>(
             "/kilin/motor_cmd_raw", 10);
+
+        instance_ = this;
+        std::signal(SIGINT, signal_handler);
 
         RCLCPP_INFO(get_logger(),
                     "KilinCmdConverter started (L=%.2f, W=%.2f, Rw=%.3f, publishing to /kilin/motor_cmd_raw)",
                     L_base, W_base, R_w);
+    }
+
+    ~KilinCmdConverter() {
+        // Safety fallback: also send zero on destruction
+        sendZeroCommand();
+    }
+
+    static void signal_handler(int) {
+        if (instance_) {
+            instance_->sendZeroCommand();
+            RCLCPP_WARN(instance_->get_logger(),
+                        "CmdConverter stopped — published zero command before shutdown.");
+            std::this_thread::sleep_for(std::chrono::milliseconds(500)); // ensure transmission
+        }
+        rclcpp::shutdown();
     }
 
 private:
@@ -53,16 +72,8 @@ private:
         double wz = std::clamp(msg->angular.z, -wmax, wmax);
 
         kilin_msgs::msg::MotorCmdStamped motor_msg;
+        fillHeader(motor_msg);
 
-        static uint32_t seq = 0;
-        motor_msg.header.seq = seq++;
-        auto now = this->get_clock()->now();
-        motor_msg.header.time.sec = static_cast<int32_t>(now.seconds());
-        motor_msg.header.time.nanosec = static_cast<uint32_t>(now.nanoseconds() % 1000000000);
-        motor_msg.header.frame_id = "cmd_converter";
-
-        // motor mode constants
-        const int REST_MODE     = 0;
         const int POSITION_MODE = 4;
         const int VELOCITY_MODE = 5;
 
@@ -82,10 +93,8 @@ private:
                 steering_angle += M_PI;
                 wheel_speed = -wheel_speed;
             }
-
-            if (steering_angle < 0) {
-                steering_angle += 2 * M_PI; // convert to [0, 2π]
-            }
+            if (steering_angle < 0)
+                steering_angle += 2 * M_PI;
 
             wheel_speed = wheel_speed / (2.0 * M_PI) * 60.0 * 10.0;
 
@@ -121,12 +130,52 @@ private:
         pub_motor->publish(motor_msg);
     }
 
+    void fillHeader(kilin_msgs::msg::MotorCmdStamped &msg) {
+        static uint32_t seq = 0;
+        msg.header.seq = seq++;
+        auto now = this->get_clock()->now();
+        msg.header.time.sec = static_cast<int32_t>(now.seconds());
+        msg.header.time.nanosec = static_cast<uint32_t>(now.nanoseconds() % 1000000000);
+        msg.header.frame_id = "cmd_converter";
+    }
+
+    void sendZeroCommand() {
+        kilin_msgs::msg::MotorCmdStamped stop_msg;
+        fillHeader(stop_msg);
+
+        // create zero commands for all legs
+        kilin_msgs::msg::MotorCmd zero_motor;
+        zero_motor.motor_mode = 5; // velocity mode
+        zero_motor.velocity = 0.0;
+
+        kilin_msgs::msg::LegCmd zero_leg;
+        zero_leg.hip = zero_motor;
+        zero_leg.steering = zero_motor;
+        zero_leg.hub = zero_motor;
+
+        stop_msg.module_a = zero_leg;
+        stop_msg.module_b = zero_leg;
+        stop_msg.module_c = zero_leg;
+        stop_msg.module_d = zero_leg;
+
+        pub_motor->publish(stop_msg);
+        RCLCPP_INFO(get_logger(), "Published zero motor_cmd_raw (safe stop).");
+    }
+
     // Parameters
     double L_base, W_base, R_w, vmax, wmax;
     std::map<std::string, ModulePos> modules;
+
+    // ROS
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_cmdvel;
     rclcpp::Publisher<kilin_msgs::msg::MotorCmdStamped>::SharedPtr pub_motor;
+
+    // static instance pointer for signal handling
+    static KilinCmdConverter *instance_;
 };
+
+// static member definition
+KilinCmdConverter *KilinCmdConverter::instance_ = nullptr;
 
 int main(int argc, char **argv) {
     rclcpp::init(argc, argv);

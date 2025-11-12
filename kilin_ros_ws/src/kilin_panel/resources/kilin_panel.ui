@@ -315,10 +315,17 @@ min-height: 20px;
      </property>
      <layout class="QVBoxLayout" name="verticalLayout_6">
       <item>
-       <widget class="QPushButton" name="btn_start_bridge">
-        <property name="text">
-         <string>Start Bridge</string>
-        </property>
+       <widget class="QComboBox" name="comboBox_input">
+        <item>
+         <property name="text">
+          <string>UI</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>Manual</string>
+         </property>
+        </item>
        </widget>
       </item>
       <item>
