@@ -1,11 +1,27 @@
 from PyQt5 import QtWidgets, uic
 from module_panel import Ui_Form
+import math
 
 class ModulePanel(QtWidgets.QWidget, Ui_Form):
     def __init__(self, module_name="A"):
         super().__init__()
         self.setupUi(self)
         self.module_name = module_name
+
+        # Initialize default values (all zeros)
+        for name in ["hip", "steering", "hub"]:
+            for suffix in ["kp", "ki", "kd", "pos_cmd", "vel_cmd", "tor_cmd"]:
+                widget = getattr(self, f'lineEdit_{name}_{suffix}', None)
+                if (widget):
+                    widget.setText("0.0")
+        for name in ["hip", "steering", "hub"]:
+            combo = getattr(self, f'comboBox_{name}_mode', None)
+            if combo:
+                idx = combo.findText("Rest")
+                if (idx >= 0):
+                    combo.setCurrentIndex(idx)
+                else:
+                    combo.setCurrentIndex(0)
 
     # Retrieve all motor commands from this module
     def get_leg_cmd(self):
@@ -27,9 +43,16 @@ class ModulePanel(QtWidgets.QWidget, Ui_Form):
         kd = self._safe_float(f"lineEdit_{name}_kd")
 
         # Command inputs (position, velocity, torque)
-        pos = self._safe_float(f"lineEdit_{name}_pos_cmd")
+        pos_deg = self._safe_float(f"lineEdit_{name}_pos_cmd")
         vel = self._safe_float(f"lineEdit_{name}_vel_cmd")
         tor = self._safe_float(f"lineEdit_{name}_tor_cmd")
+
+        # Convert degree to radian
+        pos = math.radians(pos_deg)
+        
+        # Normalize hip / steering positions to [0, 2pi]
+        if (name in ["hip", "steering"]):
+            pos = pos % (2 * math.pi)
 
         return {
             "mode": mode,
@@ -39,9 +62,10 @@ class ModulePanel(QtWidgets.QWidget, Ui_Form):
 
     # Update displayed state values (from ROS feedback)
     def update_motor_state(self, name, pos, vel, tor):
-        getattr(self, f"text_{name}_pos_state").setText(f"{pos:.2f}")
-        getattr(self, f"text_{name}_vel_state").setText(f"{vel:.2f}")
-        getattr(self, f"text_{name}_tor_state").setText(f"{tor:.2f}")
+        pos_deg = math.degrees(pos)
+        getattr(self, f"text_{name}_pos_state").setText(f"{pos_deg:.5f}")
+        getattr(self, f"text_{name}_vel_state").setText(f"{vel:.5f}")
+        getattr(self, f"text_{name}_tor_state").setText(f"{tor:.5f}")
 
     # Helper: safely convert text to float
     def _safe_float(self, widget_name):

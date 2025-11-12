@@ -17,11 +17,11 @@ public:
         // -------------------------------
         // Parameters
         // -------------------------------
-        L_base = declare_parameter<double>("L_base", 0.48);  // wheelbase
-        W_base = declare_parameter<double>("W_base", 0.4925);  // track width
-        R_w = declare_parameter<double>("R_w", 0.0525);     // wheel radius
-        vmax = declare_parameter<double>("vmax", 1.0);     // max linear velocity
-        wmax = declare_parameter<double>("wmax", 2.0);     // max angular velocity
+        L_base = declare_parameter<double>("L_base", 0.48);     // wheelbase
+        W_base = declare_parameter<double>("W_base", 0.4925);   // track width
+        R_w    = declare_parameter<double>("R_w", 0.0525);      // wheel radius
+        vmax   = declare_parameter<double>("vmax", 1.0);        // max linear velocity
+        wmax   = declare_parameter<double>("wmax", 2.0);        // max angular velocity
 
         // Module layout (A: FL, B: FR, C: RL, D: RR)
         modules["A"] = { +0.5 * L_base, +0.5 * W_base }; // Front Left
@@ -33,14 +33,16 @@ public:
         // ROS interfaces
         // -------------------------------
         sub_cmdvel = create_subscription<geometry_msgs::msg::Twist>(
-        "/kilin/cmd_vel", 10,
-        std::bind(&KilinCmdConverter::cmdVelCallback, this, std::placeholders::_1));
+            "/kilin/cmd_vel", 10,
+            std::bind(&KilinCmdConverter::cmdVelCallback, this, std::placeholders::_1));
 
-        // publish to same topic as UI: /motor/command
+        // Publish to UI instead of bridge
+        // Topic: /kilin/motor_cmd_raw
         pub_motor = create_publisher<kilin_msgs::msg::MotorCmdStamped>(
-        "/motor/command", 10);
+            "/kilin/motor_cmd_raw", 10);
 
-        RCLCPP_INFO(get_logger(), "KilinCmdConverter started (L=%.2f, W=%.2f, Rw=%.3f)",
+        RCLCPP_INFO(get_logger(),
+                    "KilinCmdConverter started (L=%.2f, W=%.2f, Rw=%.3f, publishing to /kilin/motor_cmd_raw)",
                     L_base, W_base, R_w);
     }
 
@@ -52,7 +54,6 @@ private:
 
         kilin_msgs::msg::MotorCmdStamped motor_msg;
 
-        // Header format unified with MotorNode and CLI publisher
         static uint32_t seq = 0;
         motor_msg.header.seq = seq++;
         auto now = this->get_clock()->now();
@@ -67,26 +68,26 @@ private:
 
         // Compute each module command
         for (auto &[key, pos] : modules) {
-
             double Vx = vx - wz * pos.Yi;
             double Vy = vy + wz * pos.Xi;
 
-                // steering angle in radians
             double steering_angle = std::atan2(Vy, Vx);
-
-            // wheel angular velocity magnitude
             double wheel_speed = std::sqrt(Vx * Vx + Vy * Vy) / R_w;
 
-            // make hub bidirectional, steering stays within ±90°
+            // Make hub bidirectional, steering stays within ±90°
             if (steering_angle > M_PI_2) {
-                steering_angle -= M_PI;   // flip 180°
-                wheel_speed = wheel_speed * (-1);
-            } 
-            else if (steering_angle < -M_PI_2) {
-                steering_angle += M_PI;   // flip 180°
-                wheel_speed = wheel_speed * (-1);
+                steering_angle -= M_PI;
+                wheel_speed = -wheel_speed;
+            } else if (steering_angle < -M_PI_2) {
+                steering_angle += M_PI;
+                wheel_speed = -wheel_speed;
             }
 
+            if (steering_angle < 0) {
+                steering_angle += 2 * M_PI; // convert to [0, 2π]
+            }
+
+            wheel_speed = wheel_speed / (2.0 * M_PI) * 60.0 * 10.0;
 
             // Hip
             kilin_msgs::msg::MotorCmd hip;
@@ -111,7 +112,6 @@ private:
             leg.steering = steering;
             leg.hub = hub;
 
-            // Assign to correct module
             if (key == "A") motor_msg.module_a = leg;
             else if (key == "B") motor_msg.module_b = leg;
             else if (key == "C") motor_msg.module_c = leg;

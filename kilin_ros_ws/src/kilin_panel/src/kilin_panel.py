@@ -10,6 +10,7 @@ import signal
 import sys
 import time
 
+
 class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
     """Main GUI for Kilin control system."""
 
@@ -161,21 +162,29 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
     # Qt custom events (Power and Motor updates)
     # -------------------------------------------------------------
     def customEvent(self, event):
+        """Handle custom Qt events for motor and power updates."""
         if isinstance(event, MotorStateUpdateEvent):
-            module_panel = getattr(self, f"module_{event.module.lower()}", None)
-            if module_panel:
-                module_panel.update_motor_state(event.joint, event.pos, event.vel, event.tor)
+            for module_name, joints in event.modules_state.items():
+                module_panel = getattr(self, f"module_{module_name.lower()}", None)
+                if module_panel:
+                    for joint_name, (pos, vel, tor) in joints.items():
+                        module_panel.update_motor_state(joint_name, pos, vel, tor)
+
         elif isinstance(event, VoltageUpdateEvent):
-            self.text_voltage_display.setText(f"{event.voltage:.2f} V")
+            self.text_voltage_display.setText(f"{event.voltage:.5f} V")
 
     # -------------------------------------------------------------
     # Cleanup handling (GUI close / Ctrl+C / crash)
     # -------------------------------------------------------------
     def cleanup(self):
         """Safe shutdown for ROS and threads."""
+        if getattr(self, "_cleaned", False):
+            return
+        self._cleaned = True
+
         print("\n[Panel] Cleaning up resources...")
 
-        time.sleep(1.0)
+        time.sleep(0.5) 
 
         try:
             self.executor.shutdown()
@@ -197,13 +206,13 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
             self.executor_thread.join(timeout=2)
             print("[Panel] Executor thread joined.")
 
-
         print("[Panel] Cleanup complete.")
 
     def closeEvent(self, event):
         """Triggered when GUI is closed."""
         self.cleanup()
         event.accept()
+
 
 # -------------------------------------------------------------
 # Main entry
@@ -212,7 +221,9 @@ def main():
     app = QtWidgets.QApplication(sys.argv)
     window = KilinPanel()
 
+    # -------------------------------------------------------------
     # Handle Ctrl+C (SIGINT)
+    # -------------------------------------------------------------
     def handle_sigint(sig, frame):
         print("\n[Panel] Caught Ctrl+C. Shutting down...")
         window.cleanup()

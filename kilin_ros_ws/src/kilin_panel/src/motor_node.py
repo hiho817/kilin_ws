@@ -2,17 +2,14 @@ from rclpy.node import Node
 from kilin_msgs.msg import MotorCmdStamped, LegCmd, MotorCmd, MotorStateStamped
 from PyQt5 import QtWidgets, QtCore
 
+
 # ---------- Custom Event ----------
 class MotorStateUpdateEvent(QtCore.QEvent):
     EVENT_TYPE = QtCore.QEvent.Type(QtCore.QEvent.registerEventType())
 
-    def __init__(self, module_name, joint_name, pos, vel, tor):
+    def __init__(self, modules_state):
         super().__init__(MotorStateUpdateEvent.EVENT_TYPE)
-        self.module = module_name
-        self.joint = joint_name
-        self.pos = pos
-        self.vel = vel
-        self.tor = tor
+        self.modules_state = modules_state
 
 
 class MotorNode(Node):
@@ -22,17 +19,14 @@ class MotorNode(Node):
         super().__init__('motor_gui_node')
         self.pub_motor = self.create_publisher(MotorCmdStamped, '/motor/command', 10)
         self.sub_motor_state = self.create_subscription(
-            MotorStateStamped,
-            '/motor/state',
-            self.motor_state_callback,
-            10
+            MotorStateStamped, '/motor/state', self.motor_state_callback, 10
         )
+
         self.seq = 0
         self.ui_ref = ui_ref
+        self._last_update_ns = 0
+        self._THROTTLE_NS = 0 
 
-    # -------------------------------------------------------------
-    # Publish motor command
-    # -------------------------------------------------------------
     def publish_motor_command(self, modules):
         msg = MotorCmdStamped()
         msg.header.seq = self.seq
@@ -60,12 +54,7 @@ class MotorNode(Node):
                 }
                 m.motor_mode = mode_map.get(d["mode"].lower(), 0)
 
-                if name == "hip":
-                    leg_msg.hip = m
-                elif name == "steering":
-                    leg_msg.steering = m
-                else:
-                    leg_msg.hub = m
+                setattr(leg_msg, name, m)
             return leg_msg
 
         msg.module_a = build_leg(modules["A"])
@@ -75,36 +64,31 @@ class MotorNode(Node):
 
         self.pub_motor.publish(msg)
         self.seq += 1
-        self.get_logger().info("Published /motor/command successfully.")
 
-    # -------------------------------------------------------------
-    # Subscribe motor/state
-    # -------------------------------------------------------------
     def motor_state_callback(self, msg: MotorStateStamped):
-        """Receive /motor/state and send GUI update events."""
         if not self.ui_ref:
             return
 
-        modules = {
-            "A": msg.module_a,
-            "B": msg.module_b,
-            "C": msg.module_c,
-            "D": msg.module_d
-        }
+        now_ns = self.get_clock().now().nanoseconds
+        if now_ns - self._last_update_ns < self._THROTTLE_NS:
+            return
+        self._last_update_ns = now_ns
 
         try:
-            for module_name, leg in modules.items():
-                for joint_name, motor_state in zip(
-                    ["hip", "steering", "hub"],
-                    [leg.hip, leg.steering, leg.hub]
-                ):
-                    # 只抓取 position / velocity / torque
-                    pos = motor_state.position
-                    vel = motor_state.velocity
-                    tor = motor_state.torque
-                    QtWidgets.QApplication.postEvent(
-                        self.ui_ref,
-                        MotorStateUpdateEvent(module_name, joint_name, pos, vel, tor)
-                    )
+            modules_state = {}
+            for mod_name, leg in zip(
+                ["A", "B", "C", "D"],
+                [msg.module_a, msg.module_b, msg.module_c, msg.module_d]
+            ):
+                modules_state[mod_name] = {
+                    "hip": (leg.hip.position, leg.hip.velocity, leg.hip.torque),
+                    "steering": (leg.steering.position, leg.steering.velocity, leg.steering.torque),
+                    "hub": (leg.hub.position, leg.hub.velocity, leg.hub.torque),
+                }
+
+            QtWidgets.QApplication.postEvent(
+                self.ui_ref, MotorStateUpdateEvent(modules_state)
+            )
+
         except Exception as e:
             self.get_logger().error(f"motor_state_callback error: {e}")
