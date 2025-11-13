@@ -1,71 +1,71 @@
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch.actions import RegisterEventHandler
-from launch.event_handlers import OnProcessStart
 
-def generate_launch_description():
-    # ------------------------------------
-    # Shared control parameters
-    # ------------------------------------
-    control_params = {
-        'vmax': 1.0,      # Max linear velocity [m/s]
-        'wmax': 2.0,      # Max angular velocity [rad/s]
-        'deadzone': 0.1   # Joystick deadzone ratio (0.0 ~ 1.0)
-    }
+
+def launch_setup(context, *args, **kwargs):
+
+    device = LaunchConfiguration('device').perform(context)
 
     # ------------------------------------
-    # Node definitions
+    # Axis mapping
     # ------------------------------------
-    # Command Converter Node
-    cmd_converter_node = Node(
-        package='kilin_cmd_converter',
-        executable='kilin_cmd_converter',
-        name='kilin_cmd_converter',
-        output='screen',
-        parameters=[{
-            'vmax': control_params['vmax'],
-            'wmax': control_params['wmax']
-        }]
-    )
+    if device == "pc":
+        omega_axes = 3
+    else:
+        omega_axes = 2   # default orin
 
-    # Joystick Node (translates /joy → /kilin/cmd_vel)
+    # ------------------------------------
+    # Nodes
+    # ------------------------------------
     joystick_node = Node(
         package='kilin_joystick',
         executable='kilin_joystick',
         name='kilin_joystick',
         output='screen',
-        parameters=[control_params]
+        parameters=[{
+            'omega_axes': omega_axes,
+            'vmax': 1.0,
+            'wmax': 2.0,
+            'deadzone': 0.1
+        }]
     )
 
-    # ROS2 joy_node (reads hardware joystick → /joy)
-    joy_node = Node(
+    converter_node = Node(
+        package='kilin_cmd_converter',
+        executable='kilin_cmd_converter',
+        name='kilin_cmd_converter',
+        output='screen',
+        parameters=[{
+            'vmax': 1.0,
+            'wmax': 2.0
+        }]
+    )
+
+    joydrv_node = Node(
         package='joy',
         executable='joy_node',
         name='joy_node',
         output='screen'
     )
 
-    # ------------------------------------
-    # Startup sequence:
-    # CmdConverter → Joystick → joy_node
-    # ------------------------------------
+    return [
+        converter_node,
+        joystick_node,
+        joydrv_node
+    ]
+
+
+def generate_launch_description():
+
+    device_arg = DeclareLaunchArgument(
+        'device',
+        default_value='orin',
+        description='Select joystick mapping: pc or orin'
+    )
+
     return LaunchDescription([
-        # Start cmd_converter first
-        cmd_converter_node,
-
-        # When cmd_converter is running, start joystick
-        RegisterEventHandler(
-            OnProcessStart(
-                target_action=cmd_converter_node,
-                on_start=[joystick_node]
-            )
-        ),
-
-        # When joystick is running, start joy_node
-        RegisterEventHandler(
-            OnProcessStart(
-                target_action=joystick_node,
-                on_start=[joy_node]
-            )
-        ),
+        device_arg,
+        OpaqueFunction(function=launch_setup)
     ])

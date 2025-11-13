@@ -17,6 +17,7 @@ public:
         Vmax_ = this->declare_parameter<double>("vmax", 0.8);
         Wmax_ = this->declare_parameter<double>("wmax", 1.5);
         deadzone_ = this->declare_parameter<double>("deadzone", 0.15);
+        omega_axes_ = this->declare_parameter<int>("omega_axes", 2);
 
         // -----------------------------
         // ROS interfaces
@@ -73,7 +74,7 @@ private:
         latest_vy_ = apply_deadzone(msg->axes[0]);
 
         // Right stick (ω)
-        latest_omega_ = apply_deadzone(msg->axes[2]);
+        latest_omega_ = apply_deadzone(msg->axes[omega_axes_]);
     }
 
     // --------------------------------------
@@ -102,6 +103,7 @@ private:
 
     // Parameters
     double Vmax_, Wmax_, deadzone_;
+    int omega_axes_;
 
     // Latest joystick state
     double latest_vx_ = 0.0;
