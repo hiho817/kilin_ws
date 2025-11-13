@@ -51,7 +51,7 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         self.executor.add_node(self.node_ui)
 
         # Connect Qt signal to UI update slot (runs in GUI thread)
-        self.motor_cmd_signal.connect(self.update_ui_from_motorcmd)
+        # self.motor_cmd_signal.connect(self.update_ui_from_motorcmd)
 
         # -------------------------------------------------------------
         # Insert module widgets
@@ -137,54 +137,54 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
                 "Forwarded motor_cmd_raw → /motor/command and scheduled UI update"
             )
 
-    def update_ui_from_motorcmd(self, msg: MotorCmdStamped):
-        """
-        Update all module input fields to reflect MotorCmdStamped
-        (Manual mode visual only, read-only fields).
-        This function is executed in the GUI thread via motor_cmd_signal.
-        """
-        try:
-            modules = {
-                "A": msg.module_a,
-                "B": msg.module_b,
-                "C": msg.module_c,
-                "D": msg.module_d,
-            }
+    # def update_ui_from_motorcmd(self, msg: MotorCmdStamped):
+    #     """
+    #     Update all module input fields to reflect MotorCmdStamped
+    #     (Manual mode visual only, read-only fields).
+    #     This function is executed in the GUI thread via motor_cmd_signal.
+    #     """
+    #     try:
+    #         modules = {
+    #             "A": msg.module_a,
+    #             "B": msg.module_b,
+    #             "C": msg.module_c,
+    #             "D": msg.module_d,
+    #         }
 
-            for name, leg in modules.items():
-                panel = getattr(self, f"module_{name.lower()}", None)
-                if not panel:
-                    continue
+    #         for name, leg in modules.items():
+    #             panel = getattr(self, f"module_{name.lower()}", None)
+    #             if not panel:
+    #                 continue
 
-                # --- Hip ---
-                hip_pos_deg = math.degrees(getattr(leg.hip, "position", 0.0))
-                panel.lineEdit_hip_pos_cmd.setText(f"{hip_pos_deg:.3f}")
-                panel.lineEdit_hip_vel_cmd.setText(f"{getattr(leg.hip, 'velocity', 0.0):.3f}")
-                panel.lineEdit_hip_tor_cmd.setText(f"{getattr(leg.hip, 'torque', 0.0):.3f}")
-                panel.lineEdit_hip_kp.setText(f"{getattr(leg.hip, 'kp', 0.0):.2f}")
-                panel.lineEdit_hip_ki.setText(f"{getattr(leg.hip, 'ki', 0.0):.2f}")
-                panel.lineEdit_hip_kd.setText(f"{getattr(leg.hip, 'kd', 0.0):.2f}")
+    #             # --- Hip ---
+    #             hip_pos_deg = math.degrees(getattr(leg.hip, "position", 0.0))
+    #             panel.lineEdit_hip_pos_cmd.setText(f"{hip_pos_deg:.3f}")
+    #             panel.lineEdit_hip_vel_cmd.setText(f"{getattr(leg.hip, 'velocity', 0.0):.3f}")
+    #             panel.lineEdit_hip_tor_cmd.setText(f"{getattr(leg.hip, 'torque', 0.0):.3f}")
+    #             panel.lineEdit_hip_kp.setText(f"{getattr(leg.hip, 'kp', 0.0):.2f}")
+    #             panel.lineEdit_hip_ki.setText(f"{getattr(leg.hip, 'ki', 0.0):.2f}")
+    #             panel.lineEdit_hip_kd.setText(f"{getattr(leg.hip, 'kd', 0.0):.2f}")
 
-                # --- Steering ---
-                steering_pos_deg = math.degrees(getattr(leg.steering, "position", 0.0))
-                panel.lineEdit_steering_pos_cmd.setText(f"{steering_pos_deg:.3f}")
-                panel.lineEdit_steering_vel_cmd.setText(f"{getattr(leg.steering, 'velocity', 0.0):.3f}")
-                panel.lineEdit_steering_tor_cmd.setText(f"{getattr(leg.steering, 'torque', 0.0):.3f}")
-                panel.lineEdit_steering_kp.setText(f"{getattr(leg.steering, 'kp', 0.0):.2f}")
-                panel.lineEdit_steering_ki.setText(f"{getattr(leg.steering, 'ki', 0.0):.2f}")
-                panel.lineEdit_steering_kd.setText(f"{getattr(leg.steering, 'kd', 0.0):.2f}")
+    #             # --- Steering ---
+    #             steering_pos_deg = math.degrees(getattr(leg.steering, "position", 0.0))
+    #             panel.lineEdit_steering_pos_cmd.setText(f"{steering_pos_deg:.3f}")
+    #             panel.lineEdit_steering_vel_cmd.setText(f"{getattr(leg.steering, 'velocity', 0.0):.3f}")
+    #             panel.lineEdit_steering_tor_cmd.setText(f"{getattr(leg.steering, 'torque', 0.0):.3f}")
+    #             panel.lineEdit_steering_kp.setText(f"{getattr(leg.steering, 'kp', 0.0):.2f}")
+    #             panel.lineEdit_steering_ki.setText(f"{getattr(leg.steering, 'ki', 0.0):.2f}")
+    #             panel.lineEdit_steering_kd.setText(f"{getattr(leg.steering, 'kd', 0.0):.2f}")
 
-                # --- Hub ---
-                hub_pos_deg = math.degrees(getattr(leg.hub, "position", 0.0))
-                panel.lineEdit_hub_pos_cmd.setText(f"{hub_pos_deg:.3f}")
-                panel.lineEdit_hub_vel_cmd.setText(f"{getattr(leg.hub, 'velocity', 0.0):.3f}")
-                panel.lineEdit_hub_tor_cmd.setText(f"{getattr(leg.hub, 'torque', 0.0):.3f}")
-                panel.lineEdit_hub_kp.setText(f"{getattr(leg.hub, 'kp', 0.0):.2f}")
-                panel.lineEdit_hub_ki.setText(f"{getattr(leg.hub, 'ki', 0.0):.2f}")
-                panel.lineEdit_hub_kd.setText(f"{getattr(leg.hub, 'kd', 0.0):.2f}")
+    #             # --- Hub ---
+    #             hub_pos_deg = math.degrees(getattr(leg.hub, "position", 0.0))
+    #             panel.lineEdit_hub_pos_cmd.setText(f"{hub_pos_deg:.3f}")
+    #             panel.lineEdit_hub_vel_cmd.setText(f"{getattr(leg.hub, 'velocity', 0.0):.3f}")
+    #             panel.lineEdit_hub_tor_cmd.setText(f"{getattr(leg.hub, 'torque', 0.0):.3f}")
+    #             panel.lineEdit_hub_kp.setText(f"{getattr(leg.hub, 'kp', 0.0):.2f}")
+    #             panel.lineEdit_hub_ki.setText(f"{getattr(leg.hub, 'ki', 0.0):.2f}")
+    #             panel.lineEdit_hub_kd.setText(f"{getattr(leg.hub, 'kd', 0.0):.2f}")
 
-        except Exception as e:
-            self.node_ui.get_logger().error(f"UI update error: {e}")
+    #     except Exception as e:
+    #         self.node_ui.get_logger().error(f"UI update error: {e}")
 
     def set_manual_editable(self, enabled: bool):
         """

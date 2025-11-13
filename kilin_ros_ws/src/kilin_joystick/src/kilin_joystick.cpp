@@ -73,7 +73,7 @@ private:
         latest_vy_ = apply_deadzone(msg->axes[0]);
 
         // Right stick (ω)
-        latest_omega_ = apply_deadzone(msg->axes[3]);
+        latest_omega_ = apply_deadzone(msg->axes[2]);
     }
 
     // --------------------------------------
