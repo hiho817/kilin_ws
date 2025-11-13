@@ -8,8 +8,8 @@ def generate_launch_description():
     # Shared control parameters
     # ------------------------------------
     control_params = {
-        'vmax': 1.0,      # Max linear velocity [m/s]
-        'wmax': 2.0,      # Max angular velocity [rad/s]
+        'vmax': 0.1,      # Max linear velocity [m/s]
+        'wmax': 0.2,      # Max angular velocity [rad/s]
         'deadzone': 0.1   # Joystick deadzone ratio (0.0 ~ 1.0)
     }
 
