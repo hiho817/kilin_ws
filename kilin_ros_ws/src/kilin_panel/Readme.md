@@ -40,8 +40,7 @@ python3 src/kilin_panel.py
 ```
 
 Notes:
-- The GUI can start a separate bridge process by pressing the "Start Bridge" button — this runs `ros2 run kilin_ros2_bridge kilin_ros2_bridge`. Make sure the `kilin_ros2_bridge` package is installed if you want that feature.
-- Ensure you have a running ROS 2 master/environment and the topics `/power/state`, `/motor/state` and corresponding publishers/subscribers available from the robot or simulator.
+- Ensure you have a running ROS 2 environment and that the topics `/power/state`, `/motor/state`, `/kilin/motor_cmd_raw` and `/motor/command` are available as required by your configuration.
 
 ---
 
@@ -54,8 +53,7 @@ This package places Python modules in `src/`. Below is a per-file summary of the
     - Builds the UI using `Ui_MainWindow`.
     - Initializes ROS2 (`rclpy`) and creates two ROS nodes (`PowerNode` and `MotorNode`).
     - Hosts four `ModulePanel` widgets (modules A..D) for motor command editing.
-    - Handles power toggles (digital/signal/power), emergency stop, sending motor commands,
-      and starting/stopping a bridge subprocess.
+    - Handles power toggles (digital/signal/power), emergency stop, sending motor commands, and switching between UI/Manual control modes. In Manual mode the panel forwards `/kilin/motor_cmd_raw` → `/motor/command` and makes module inputs read-only so the operator can monitor commanded values.
   - Contains the `main()` entry point used by the console script (`kilin_panel = kilin_panel:main`).
 
 - `src/mainwindow.py`
@@ -103,5 +101,23 @@ This package places Python modules in `src/`. Below is a per-file summary of the
 - Feedback:
   - Voltage display (updated from `/power/state`).
   - Motor position/velocity/torque displays for each motor (updated from `/motor/state`).
-- Bridge helper:
-  - Start/Stop Bridge button launches an external `ros2 run kilin_ros2_bridge kilin_ros2_bridge` subprocess (silenced stdout/stderr by default).
+---
+
+## Mode switching & forwarding behavior
+
+- The GUI supports two control modes (ComboBox `comboBox_input`): `UI` and `Manual`.
+  - UI mode: user edits module panels and presses `Send` to publish a manual `/motor/command`.
+  - Manual mode: the GUI forwards incoming `/kilin/motor_cmd_raw` messages to `/motor/command` (useful when running the joystick+converter pipeline) and updates the module panels in read-only mode for monitoring.
+
+## ROS nodes, executor and threading
+
+- On startup the GUI initializes ROS2 (`rclpy.init`) and creates three nodes:
+  - `PowerNode` — publishes `/power/command`, subscribes to `/power/state` and posts voltage updates to the GUI thread.
+  - `MotorNode` — publishes `/motor/command` when the user sends manual commands and subscribes to `/motor/state` to receive motor feedback.
+  - `kilin_panel_ui` — an internal node used to forward `/kilin/motor_cmd_raw` → `/motor/command` and to publish zero commands on mode switches.
+
+- A `MultiThreadedExecutor` is used and spun in a background thread so ROS callbacks don't block the Qt event loop. UI updates coming from ROS callbacks are posted as Qt events or emitted as signals and handled in the main GUI thread.
+
+## Cleanup and shutdown
+
+- The panel implements a `cleanup()` routine called on window close or on SIGINT which shuts down the executor, destroys nodes and calls `rclpy.shutdown()`. The executor thread is joined with a short timeout to ensure a clean exit.
