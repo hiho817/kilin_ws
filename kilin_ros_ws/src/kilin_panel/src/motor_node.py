@@ -25,7 +25,8 @@ class MotorNode(Node):
         self.seq = 0
         self.ui_ref = ui_ref
         self._last_update_ns = 0
-        self._THROTTLE_NS = 0 
+        THROTTLE_HZ = 10
+        self._THROTTLE_NS = int(1e9 / THROTTLE_HZ)  # Convert Hz to nanoseconds
 
     def publish_motor_command(self, modules):
         msg = MotorCmdStamped()
