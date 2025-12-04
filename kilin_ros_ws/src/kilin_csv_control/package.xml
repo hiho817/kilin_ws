@@ -1,15 +1,14 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>kilin_cmd_converter</name>
+  <name>kilin_csv_control</name>
   <version>0.0.0</version>
-  <description>Kilin command converter: convert /cmd_vel to /motor_cmd_stamped.</description>
+  <description>CSV-based motor command controller for Kilin robot.</description>
   <maintainer email="ian20030201@gmail.com">ian920201</maintainer>
   <license>TODO</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
-  <depend>geometry_msgs</depend>
   <depend>kilin_msgs</depend>
 
   <export>
