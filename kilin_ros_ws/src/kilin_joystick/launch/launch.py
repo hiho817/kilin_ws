@@ -7,18 +7,14 @@ from launch_ros.actions import Node
 def launch_setup(context, *args, **kwargs):
 
     device = LaunchConfiguration('device').perform(context)
+    vmax   = float(LaunchConfiguration('vmax').perform(context))
 
-    # ------------------------------------
     # Axis mapping
-    # ------------------------------------
     if device == "pc":
         omega_axes = 3
     else:
-        omega_axes = 2   # default orin
+        omega_axes = 2
 
-    # ------------------------------------
-    # Nodes
-    # ------------------------------------
     joystick_node = Node(
         package='kilin_joystick',
         executable='kilin_joystick',
@@ -26,7 +22,7 @@ def launch_setup(context, *args, **kwargs):
         output='screen',
         parameters=[{
             'omega_axes': omega_axes,
-            'vmax': 1.0,
+            'vmax': vmax,
             'wmax': 2.0,
             'deadzone': 0.1
         }]
@@ -38,7 +34,7 @@ def launch_setup(context, *args, **kwargs):
         name='kilin_cmd_converter',
         output='screen',
         parameters=[{
-            'vmax': 1.0,
+            'vmax': vmax,
             'wmax': 2.0
         }]
     )
@@ -50,22 +46,24 @@ def launch_setup(context, *args, **kwargs):
         output='screen'
     )
 
-    return [
-        converter_node,
-        joystick_node,
-        joydrv_node
-    ]
+    return [converter_node, joystick_node, joydrv_node]
 
 
 def generate_launch_description():
 
-    device_arg = DeclareLaunchArgument(
-        'device',
-        default_value='orin',
-        description='Select joystick mapping: pc or orin'
-    )
-
     return LaunchDescription([
-        device_arg,
+
+        DeclareLaunchArgument(
+            'device',
+            default_value='orin',
+            description='Select joystick mapping: pc or orin'
+        ),
+
+        DeclareLaunchArgument(
+            'vmax',
+            default_value='1.0',
+            description='Max linear velocity'
+        ),
+
         OpaqueFunction(function=launch_setup)
     ])
