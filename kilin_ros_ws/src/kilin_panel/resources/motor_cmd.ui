@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>490</width>
-    <height>320</height>
+    <height>350</height>
    </rect>
   </property>
   <property name="minimumSize">
@@ -19,7 +19,7 @@
   <property name="maximumSize">
    <size>
     <width>500</width>
-    <height>330</height>
+    <height>350</height>
    </size>
   </property>
   <property name="windowTitle">
@@ -31,7 +31,7 @@
      <x>10</x>
      <y>10</y>
      <width>471</width>
-     <height>101</height>
+     <height>111</height>
     </rect>
    </property>
    <property name="title">
@@ -93,7 +93,7 @@
     <property name="geometry">
      <rect>
       <x>370</x>
-      <y>20</y>
+      <y>30</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -132,7 +132,7 @@
     <property name="geometry">
      <rect>
       <x>370</x>
-      <y>50</y>
+      <y>60</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -171,7 +171,7 @@
     <property name="geometry">
      <rect>
       <x>370</x>
-      <y>80</y>
+      <y>90</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -210,7 +210,7 @@
     <property name="geometry">
      <rect>
       <x>240</x>
-      <y>50</y>
+      <y>60</y>
       <width>16</width>
       <height>17</height>
      </rect>
@@ -228,7 +228,7 @@
     <property name="geometry">
      <rect>
       <x>240</x>
-      <y>20</y>
+      <y>30</y>
       <width>16</width>
       <height>16</height>
      </rect>
@@ -246,7 +246,7 @@
     <property name="geometry">
      <rect>
       <x>240</x>
-      <y>80</y>
+      <y>90</y>
       <width>16</width>
       <height>17</height>
      </rect>
@@ -264,7 +264,7 @@
     <property name="geometry">
      <rect>
       <x>260</x>
-      <y>20</y>
+      <y>30</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -274,7 +274,7 @@
     <property name="geometry">
      <rect>
       <x>260</x>
-      <y>50</y>
+      <y>60</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -284,7 +284,7 @@
     <property name="geometry">
      <rect>
       <x>260</x>
-      <y>80</y>
+      <y>90</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -294,7 +294,7 @@
     <property name="geometry">
      <rect>
       <x>180</x>
-      <y>20</y>
+      <y>30</y>
       <width>50</width>
       <height>21</height>
      </rect>
@@ -304,7 +304,7 @@
     <property name="geometry">
      <rect>
       <x>180</x>
-      <y>50</y>
+      <y>60</y>
       <width>50</width>
       <height>21</height>
      </rect>
@@ -314,7 +314,7 @@
     <property name="geometry">
      <rect>
       <x>180</x>
-      <y>80</y>
+      <y>90</y>
       <width>50</width>
       <height>21</height>
      </rect>
@@ -324,7 +324,7 @@
     <property name="geometry">
      <rect>
       <x>160</x>
-      <y>20</y>
+      <y>30</y>
       <width>21</width>
       <height>17</height>
      </rect>
@@ -342,7 +342,7 @@
     <property name="geometry">
      <rect>
       <x>160</x>
-      <y>50</y>
+      <y>60</y>
       <width>21</width>
       <height>17</height>
      </rect>
@@ -360,7 +360,7 @@
     <property name="geometry">
      <rect>
       <x>160</x>
-      <y>80</y>
+      <y>90</y>
       <width>21</width>
       <height>17</height>
      </rect>
@@ -396,7 +396,7 @@
     <property name="geometry">
      <rect>
       <x>10</x>
-      <y>70</y>
+      <y>60</y>
       <width>31</width>
       <height>17</height>
      </rect>
@@ -414,7 +414,7 @@
     <property name="geometry">
      <rect>
       <x>30</x>
-      <y>70</y>
+      <y>60</y>
       <width>111</width>
       <height>25</height>
      </rect>
@@ -449,12 +449,69 @@
      <enum>QTextEdit::WidgetWidth</enum>
     </property>
    </widget>
+   <widget class="QTextBrowser" name="text_hip_error">
+    <property name="geometry">
+     <rect>
+      <x>50</x>
+      <y>90</y>
+      <width>90</width>
+      <height>18</height>
+     </rect>
+    </property>
+    <property name="minimumSize">
+     <size>
+      <width>90</width>
+      <height>18</height>
+     </size>
+    </property>
+    <property name="maximumSize">
+     <size>
+      <width>90</width>
+      <height>18</height>
+     </size>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>11</pointsize>
+     </font>
+    </property>
+    <property name="styleSheet">
+     <string notr="true"/>
+    </property>
+    <property name="verticalScrollBarPolicy">
+     <enum>Qt::ScrollBarAlwaysOff</enum>
+    </property>
+    <property name="horizontalScrollBarPolicy">
+     <enum>Qt::ScrollBarAsNeeded</enum>
+    </property>
+    <property name="lineWrapMode">
+     <enum>QTextEdit::WidgetWidth</enum>
+    </property>
+   </widget>
+   <widget class="QLabel" name="label_hip_error">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>90</y>
+      <width>31</width>
+      <height>17</height>
+     </rect>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>10</pointsize>
+     </font>
+    </property>
+    <property name="text">
+     <string>Error</string>
+    </property>
+   </widget>
   </widget>
   <widget class="QLabel" name="label_cmd">
    <property name="geometry">
     <rect>
      <x>280</x>
-     <y>0</y>
+     <y>10</y>
      <width>67</width>
      <height>17</height>
     </rect>
@@ -472,7 +529,7 @@
    <property name="geometry">
     <rect>
      <x>410</x>
-     <y>0</y>
+     <y>10</y>
      <width>51</width>
      <height>17</height>
     </rect>
@@ -490,9 +547,9 @@
    <property name="geometry">
     <rect>
      <x>10</x>
-     <y>110</y>
+     <y>120</y>
      <width>471</width>
-     <height>101</height>
+     <height>111</height>
     </rect>
    </property>
    <property name="title">
@@ -554,7 +611,7 @@
     <property name="geometry">
      <rect>
       <x>370</x>
-      <y>20</y>
+      <y>30</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -593,7 +650,7 @@
     <property name="geometry">
      <rect>
       <x>370</x>
-      <y>50</y>
+      <y>60</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -632,7 +689,7 @@
     <property name="geometry">
      <rect>
       <x>370</x>
-      <y>80</y>
+      <y>90</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -671,7 +728,7 @@
     <property name="geometry">
      <rect>
       <x>240</x>
-      <y>50</y>
+      <y>60</y>
       <width>16</width>
       <height>17</height>
      </rect>
@@ -689,7 +746,7 @@
     <property name="geometry">
      <rect>
       <x>240</x>
-      <y>20</y>
+      <y>30</y>
       <width>16</width>
       <height>16</height>
      </rect>
@@ -707,7 +764,7 @@
     <property name="geometry">
      <rect>
       <x>240</x>
-      <y>80</y>
+      <y>90</y>
       <width>16</width>
       <height>17</height>
      </rect>
@@ -725,7 +782,7 @@
     <property name="geometry">
      <rect>
       <x>260</x>
-      <y>20</y>
+      <y>30</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -735,7 +792,7 @@
     <property name="geometry">
      <rect>
       <x>260</x>
-      <y>50</y>
+      <y>60</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -745,7 +802,7 @@
     <property name="geometry">
      <rect>
       <x>260</x>
-      <y>80</y>
+      <y>90</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -755,7 +812,7 @@
     <property name="geometry">
      <rect>
       <x>180</x>
-      <y>20</y>
+      <y>30</y>
       <width>50</width>
       <height>21</height>
      </rect>
@@ -765,7 +822,7 @@
     <property name="geometry">
      <rect>
       <x>180</x>
-      <y>50</y>
+      <y>60</y>
       <width>50</width>
       <height>21</height>
      </rect>
@@ -775,7 +832,7 @@
     <property name="geometry">
      <rect>
       <x>180</x>
-      <y>80</y>
+      <y>90</y>
       <width>50</width>
       <height>21</height>
      </rect>
@@ -785,7 +842,7 @@
     <property name="geometry">
      <rect>
       <x>160</x>
-      <y>20</y>
+      <y>30</y>
       <width>21</width>
       <height>17</height>
      </rect>
@@ -803,7 +860,7 @@
     <property name="geometry">
      <rect>
       <x>160</x>
-      <y>50</y>
+      <y>60</y>
       <width>21</width>
       <height>17</height>
      </rect>
@@ -821,7 +878,7 @@
     <property name="geometry">
      <rect>
       <x>160</x>
-      <y>80</y>
+      <y>90</y>
       <width>21</width>
       <height>17</height>
      </rect>
@@ -839,7 +896,7 @@
     <property name="geometry">
      <rect>
       <x>10</x>
-      <y>70</y>
+      <y>60</y>
       <width>31</width>
       <height>17</height>
      </rect>
@@ -875,7 +932,7 @@
     <property name="geometry">
      <rect>
       <x>30</x>
-      <y>70</y>
+      <y>60</y>
       <width>111</width>
       <height>25</height>
      </rect>
@@ -910,14 +967,71 @@
      <enum>QTextEdit::WidgetWidth</enum>
     </property>
    </widget>
+   <widget class="QTextBrowser" name="text_steering_error">
+    <property name="geometry">
+     <rect>
+      <x>50</x>
+      <y>90</y>
+      <width>90</width>
+      <height>18</height>
+     </rect>
+    </property>
+    <property name="minimumSize">
+     <size>
+      <width>90</width>
+      <height>18</height>
+     </size>
+    </property>
+    <property name="maximumSize">
+     <size>
+      <width>90</width>
+      <height>18</height>
+     </size>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>11</pointsize>
+     </font>
+    </property>
+    <property name="styleSheet">
+     <string notr="true"/>
+    </property>
+    <property name="verticalScrollBarPolicy">
+     <enum>Qt::ScrollBarAlwaysOff</enum>
+    </property>
+    <property name="horizontalScrollBarPolicy">
+     <enum>Qt::ScrollBarAsNeeded</enum>
+    </property>
+    <property name="lineWrapMode">
+     <enum>QTextEdit::WidgetWidth</enum>
+    </property>
+   </widget>
+   <widget class="QLabel" name="label_steering_error">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>90</y>
+      <width>31</width>
+      <height>17</height>
+     </rect>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>10</pointsize>
+     </font>
+    </property>
+    <property name="text">
+     <string>Error</string>
+    </property>
+   </widget>
   </widget>
   <widget class="QGroupBox" name="groupBox_hub">
    <property name="geometry">
     <rect>
      <x>10</x>
-     <y>210</y>
+     <y>230</y>
      <width>471</width>
-     <height>101</height>
+     <height>111</height>
     </rect>
    </property>
    <property name="title">
@@ -979,7 +1093,7 @@
     <property name="geometry">
      <rect>
       <x>370</x>
-      <y>20</y>
+      <y>30</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -1018,7 +1132,7 @@
     <property name="geometry">
      <rect>
       <x>370</x>
-      <y>50</y>
+      <y>60</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -1057,7 +1171,7 @@
     <property name="geometry">
      <rect>
       <x>370</x>
-      <y>80</y>
+      <y>90</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -1096,7 +1210,7 @@
     <property name="geometry">
      <rect>
       <x>240</x>
-      <y>50</y>
+      <y>60</y>
       <width>16</width>
       <height>17</height>
      </rect>
@@ -1114,7 +1228,7 @@
     <property name="geometry">
      <rect>
       <x>240</x>
-      <y>20</y>
+      <y>30</y>
       <width>16</width>
       <height>16</height>
      </rect>
@@ -1132,7 +1246,7 @@
     <property name="geometry">
      <rect>
       <x>240</x>
-      <y>80</y>
+      <y>90</y>
       <width>16</width>
       <height>17</height>
      </rect>
@@ -1150,7 +1264,7 @@
     <property name="geometry">
      <rect>
       <x>260</x>
-      <y>20</y>
+      <y>30</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -1160,7 +1274,7 @@
     <property name="geometry">
      <rect>
       <x>260</x>
-      <y>50</y>
+      <y>60</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -1170,7 +1284,7 @@
     <property name="geometry">
      <rect>
       <x>260</x>
-      <y>80</y>
+      <y>90</y>
       <width>88</width>
       <height>21</height>
      </rect>
@@ -1180,7 +1294,7 @@
     <property name="geometry">
      <rect>
       <x>180</x>
-      <y>20</y>
+      <y>30</y>
       <width>50</width>
       <height>21</height>
      </rect>
@@ -1190,7 +1304,7 @@
     <property name="geometry">
      <rect>
       <x>180</x>
-      <y>50</y>
+      <y>60</y>
       <width>50</width>
       <height>21</height>
      </rect>
@@ -1200,7 +1314,7 @@
     <property name="geometry">
      <rect>
       <x>180</x>
-      <y>80</y>
+      <y>90</y>
       <width>50</width>
       <height>21</height>
      </rect>
@@ -1210,7 +1324,7 @@
     <property name="geometry">
      <rect>
       <x>160</x>
-      <y>20</y>
+      <y>30</y>
       <width>21</width>
       <height>17</height>
      </rect>
@@ -1228,7 +1342,7 @@
     <property name="geometry">
      <rect>
       <x>160</x>
-      <y>50</y>
+      <y>60</y>
       <width>21</width>
       <height>17</height>
      </rect>
@@ -1246,7 +1360,7 @@
     <property name="geometry">
      <rect>
       <x>160</x>
-      <y>80</y>
+      <y>90</y>
       <width>21</width>
       <height>17</height>
      </rect>
@@ -1282,7 +1396,7 @@
     <property name="geometry">
      <rect>
       <x>10</x>
-      <y>70</y>
+      <y>60</y>
       <width>31</width>
       <height>17</height>
      </rect>
@@ -1300,7 +1414,7 @@
     <property name="geometry">
      <rect>
       <x>30</x>
-      <y>70</y>
+      <y>60</y>
       <width>111</width>
       <height>25</height>
      </rect>
@@ -1333,6 +1447,63 @@
     </property>
     <property name="lineWrapMode">
      <enum>QTextEdit::WidgetWidth</enum>
+    </property>
+   </widget>
+   <widget class="QTextBrowser" name="text_hub_error">
+    <property name="geometry">
+     <rect>
+      <x>50</x>
+      <y>90</y>
+      <width>90</width>
+      <height>18</height>
+     </rect>
+    </property>
+    <property name="minimumSize">
+     <size>
+      <width>90</width>
+      <height>18</height>
+     </size>
+    </property>
+    <property name="maximumSize">
+     <size>
+      <width>90</width>
+      <height>18</height>
+     </size>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>11</pointsize>
+     </font>
+    </property>
+    <property name="styleSheet">
+     <string notr="true"/>
+    </property>
+    <property name="verticalScrollBarPolicy">
+     <enum>Qt::ScrollBarAlwaysOff</enum>
+    </property>
+    <property name="horizontalScrollBarPolicy">
+     <enum>Qt::ScrollBarAsNeeded</enum>
+    </property>
+    <property name="lineWrapMode">
+     <enum>QTextEdit::WidgetWidth</enum>
+    </property>
+   </widget>
+   <widget class="QLabel" name="label_hub_error">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>90</y>
+      <width>31</width>
+      <height>17</height>
+     </rect>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>10</pointsize>
+     </font>
+    </property>
+    <property name="text">
+     <string>Error</string>
     </property>
    </widget>
   </widget>

@@ -61,18 +61,42 @@ class ModulePanel(QtWidgets.QWidget, Ui_Form):
         }
 
     # Update displayed state values (from ROS feedback)
-    def update_motor_state(self, name, pos, vel, tor, mode=None):
+    def update_motor_state(self, name, pos, vel, tor, mode=None, error=None):
+        # Convert rad → deg
         pos_deg = math.degrees(pos)
         getattr(self, f"text_{name}_pos_state").setText(f"{pos_deg:.5f}")
         getattr(self, f"text_{name}_vel_state").setText(f"{vel:.5f}")
         getattr(self, f"text_{name}_tor_state").setText(f"{tor:.5f}")
+
+        # Motor mode (optional)
         if mode is not None:
             mode_map = {
                 0: "Rest", 1: "Config", 2: "Set Zero",
                 3: "HAL Calibrate", 4: "Position Mode",
                 5: "Velocity Mode", 6: "Torque Mode"
             }
-            getattr(self, f"text_{name}_mode_state").setText(mode_map.get(mode, str(mode)))
+            getattr(self, f"text_{name}_mode_state").setText(
+                mode_map.get(mode, str(mode))
+            )
+
+        # ---------- Error Code (new) ----------
+        if error is not None:
+            error_map = {
+                0: "OK",
+                1: "TIMEOUT"
+            }
+            widget = getattr(self, f"text_{name}_error")
+            widget.setText(error_map.get(error, str(error)))
+
+            # Smaller font for error text
+            font = widget.font()
+            font.setPointSize(8)  # 8pt small font
+            widget.setFont(font)
+            if error == 0:
+                widget.setStyleSheet("")
+            else:
+                widget.setStyleSheet("background-color: #ffb3b3; border-radius: 3px;")
+
 
     # Helper: safely convert text to float
     def _safe_float(self, widget_name):

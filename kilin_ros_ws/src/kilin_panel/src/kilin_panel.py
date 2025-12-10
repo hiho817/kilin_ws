@@ -1,7 +1,7 @@
 from PyQt5 import QtWidgets, QtCore
 from mainwindow import Ui_MainWindow
 from module_widget import ModulePanel
-from power_node import PowerNode, VoltageUpdateEvent
+from power_node import PowerNode, PowerStateUpdateEvent
 from motor_node import MotorNode, MotorStateUpdateEvent
 from kilin_msgs.msg import MotorCmdStamped
 import rclpy
@@ -137,55 +137,6 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
                 "Forwarded motor_cmd_raw → /motor/command and scheduled UI update"
             )
 
-    # def update_ui_from_motorcmd(self, msg: MotorCmdStamped):
-    #     """
-    #     Update all module input fields to reflect MotorCmdStamped
-    #     (Manual mode visual only, read-only fields).
-    #     This function is executed in the GUI thread via motor_cmd_signal.
-    #     """
-    #     try:
-    #         modules = {
-    #             "A": msg.module_a,
-    #             "B": msg.module_b,
-    #             "C": msg.module_c,
-    #             "D": msg.module_d,
-    #         }
-
-    #         for name, leg in modules.items():
-    #             panel = getattr(self, f"module_{name.lower()}", None)
-    #             if not panel:
-    #                 continue
-
-    #             # --- Hip ---
-    #             hip_pos_deg = math.degrees(getattr(leg.hip, "position", 0.0))
-    #             panel.lineEdit_hip_pos_cmd.setText(f"{hip_pos_deg:.3f}")
-    #             panel.lineEdit_hip_vel_cmd.setText(f"{getattr(leg.hip, 'velocity', 0.0):.3f}")
-    #             panel.lineEdit_hip_tor_cmd.setText(f"{getattr(leg.hip, 'torque', 0.0):.3f}")
-    #             panel.lineEdit_hip_kp.setText(f"{getattr(leg.hip, 'kp', 0.0):.2f}")
-    #             panel.lineEdit_hip_ki.setText(f"{getattr(leg.hip, 'ki', 0.0):.2f}")
-    #             panel.lineEdit_hip_kd.setText(f"{getattr(leg.hip, 'kd', 0.0):.2f}")
-
-    #             # --- Steering ---
-    #             steering_pos_deg = math.degrees(getattr(leg.steering, "position", 0.0))
-    #             panel.lineEdit_steering_pos_cmd.setText(f"{steering_pos_deg:.3f}")
-    #             panel.lineEdit_steering_vel_cmd.setText(f"{getattr(leg.steering, 'velocity', 0.0):.3f}")
-    #             panel.lineEdit_steering_tor_cmd.setText(f"{getattr(leg.steering, 'torque', 0.0):.3f}")
-    #             panel.lineEdit_steering_kp.setText(f"{getattr(leg.steering, 'kp', 0.0):.2f}")
-    #             panel.lineEdit_steering_ki.setText(f"{getattr(leg.steering, 'ki', 0.0):.2f}")
-    #             panel.lineEdit_steering_kd.setText(f"{getattr(leg.steering, 'kd', 0.0):.2f}")
-
-    #             # --- Hub ---
-    #             hub_pos_deg = math.degrees(getattr(leg.hub, "position", 0.0))
-    #             panel.lineEdit_hub_pos_cmd.setText(f"{hub_pos_deg:.3f}")
-    #             panel.lineEdit_hub_vel_cmd.setText(f"{getattr(leg.hub, 'velocity', 0.0):.3f}")
-    #             panel.lineEdit_hub_tor_cmd.setText(f"{getattr(leg.hub, 'torque', 0.0):.3f}")
-    #             panel.lineEdit_hub_kp.setText(f"{getattr(leg.hub, 'kp', 0.0):.2f}")
-    #             panel.lineEdit_hub_ki.setText(f"{getattr(leg.hub, 'ki', 0.0):.2f}")
-    #             panel.lineEdit_hub_kd.setText(f"{getattr(leg.hub, 'kd', 0.0):.2f}")
-
-    #     except Exception as e:
-    #         self.node_ui.get_logger().error(f"UI update error: {e}")
-
     def set_manual_editable(self, enabled: bool):
         """
         Enable/disable all input fields in ModulePanels.
@@ -219,8 +170,6 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
             if self.power_on:
                 return
             self.digital_on = not self.digital_on
-            self.update_led("digital", self.digital_on)
-
         elif name == "signal":
             if not self.signal_on:
                 if not self.digital_on:
@@ -229,13 +178,11 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
                 if self.power_on:
                     return
             self.signal_on = not self.signal_on
-            self.update_led("signal", self.signal_on)
 
         elif name == "power":
             if not self.power_on and not self.signal_on:
                 return
             self.power_on = not self.power_on
-            self.update_led("power", self.power_on)
 
         self.power_node.publish_power_command(
             self.digital_on, self.signal_on, self.power_on
@@ -308,21 +255,60 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         self.handle_send()
 
     # -------------------------------------------------------------
+    # Timeout safety handler
+    # -------------------------------------------------------------
+    def handle_timeout_event(self):
+        """Safety fallback: triggered whenever any motor reports an error."""
+        self.node_ui.get_logger().error("[SAFETY] Motor timeout detected! Switching to safe mode.")
+
+        # 1. If currently in Manual mode, force switch back to UI mode
+        if self.current_mode == "Manual":
+            self.node_ui.get_logger().warn("[SAFETY] Forced switch to UI control mode.")
+            self.comboBox_input.setCurrentText("UI")
+
+        # 2. Set all motors in UI to Rest mode
+        for module in [self.module_a, self.module_b, self.module_c, self.module_d]:
+            for motor in ["hip", "steering", "hub"]:
+                combo = getattr(module, f"comboBox_{motor}_mode")
+                index = combo.findText("Rest")
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+
+        # 3. Publish the Rest command once
+        self.handle_send()
+
+        self.node_ui.get_logger().warn("[SAFETY] All motors forced to Rest mode due to timeout.")
+
+    # -------------------------------------------------------------
     # Qt custom events (Power and Motor updates)
     # -------------------------------------------------------------
     def customEvent(self, event):
         """Handle custom Qt events for motor and power updates."""
         if isinstance(event, MotorStateUpdateEvent):
+
+            timeout_detected = False  # <-- Added flag for timeout detection
+
             for module_name, joints in event.modules_state.items():
                 module_panel = getattr(self, f"module_{module_name.lower()}", None)
                 if module_panel:
-                    for joint_name, (pos, vel, tor, mode) in joints.items():
+                    for joint_name, (pos, vel, tor, mode, error) in joints.items():
                         module_panel.update_motor_state(
-                            joint_name, pos, vel, tor, mode
+                            joint_name, pos, vel, tor, mode, error
                         )
 
-        elif isinstance(event, VoltageUpdateEvent):
-            self.text_voltage_display.setText(f"{event.voltage:.5f} V")
+                        # If ANY error code is non-zero → mark timeout
+                        if error != 0:
+                            timeout_detected = True
+
+            # Trigger safety routine if needed
+            if timeout_detected:
+                self.handle_timeout_event()
+
+        elif isinstance(event, PowerStateUpdateEvent):
+            self.text_voltage_display.setText(f"{event.voltages[0]:.5f} V")
+            self.update_led("digital", event.digital)
+            self.update_led("signal", event.signal)
+            self.update_led("power", event.power)
 
     # -------------------------------------------------------------
     # Cleanup handling (GUI close / Ctrl+C / crash)
