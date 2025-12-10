@@ -137,7 +137,7 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
                 "Forwarded motor_cmd_raw → /motor/command and scheduled UI update"
             )
 
-        # -------------------------------------------------------------
+    # -------------------------------------------------------------
     # Update displayed state in Manual mode (pos / vel / tor only)
     # -------------------------------------------------------------
     def update_ui_from_motorcmd(self, msg: MotorCmdStamped):
