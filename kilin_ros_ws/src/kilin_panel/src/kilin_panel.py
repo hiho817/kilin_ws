@@ -51,7 +51,7 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         self.executor.add_node(self.node_ui)
 
         # Connect Qt signal to UI update slot (runs in GUI thread)
-        # self.motor_cmd_signal.connect(self.update_ui_from_motorcmd)
+        self.motor_cmd_signal.connect(self.update_ui_from_motorcmd)
 
         # -------------------------------------------------------------
         # Insert module widgets
@@ -136,6 +136,49 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
             self.node_ui.get_logger().debug(
                 "Forwarded motor_cmd_raw → /motor/command and scheduled UI update"
             )
+
+        # -------------------------------------------------------------
+    # Update displayed state in Manual mode (pos / vel / tor only)
+    # -------------------------------------------------------------
+    def update_ui_from_motorcmd(self, msg: MotorCmdStamped):
+        """
+        Update UI fields to reflect incoming motor commands in Manual mode.
+        Only updates pos / vel / tor state fields to keep UI lightweight.
+        This function runs in the GUI thread via motor_cmd_signal.
+        """
+        try:
+            modules = {
+                "A": msg.module_a,
+                "B": msg.module_b,
+                "C": msg.module_c,
+                "D": msg.module_d,
+            }
+
+            for name, leg in modules.items():
+                panel = getattr(self, f"module_{name.lower()}", None)
+                if panel is None:
+                    continue
+
+                # --- Hip ---
+                hip_pos = math.degrees(getattr(leg.hip, "position", 0.0))
+                panel.text_hip_pos_state.setText(f"{hip_pos:.3f}")
+                panel.text_hip_vel_state.setText(f"{getattr(leg.hip, 'velocity', 0.0):.3f}")
+                panel.text_hip_tor_state.setText(f"{getattr(leg.hip, 'torque', 0.0):.3f}")
+
+                # --- Steering ---
+                steering_pos = math.degrees(getattr(leg.steering, "position", 0.0))
+                panel.text_steering_pos_state.setText(f"{steering_pos:.3f}")
+                panel.text_steering_vel_state.setText(f"{getattr(leg.steering, 'velocity', 0.0):.3f}")
+                panel.text_steering_tor_state.setText(f"{getattr(leg.steering, 'torque', 0.0):.3f}")
+
+                # --- Hub ---
+                hub_pos = math.degrees(getattr(leg.hub, "position", 0.0))
+                panel.text_hub_pos_state.setText(f"{hub_pos:.3f}")
+                panel.text_hub_vel_state.setText(f"{getattr(leg.hub, 'velocity', 0.0):.3f}")
+                panel.text_hub_tor_state.setText(f"{getattr(leg.hub, 'torque', 0.0):.3f}")
+
+        except Exception as e:
+            self.node_ui.get_logger().error(f"UI update error: {e}")
 
     def set_manual_editable(self, enabled: bool):
         """
@@ -305,10 +348,13 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
                 self.handle_timeout_event()
 
         elif isinstance(event, PowerStateUpdateEvent):
-            self.text_voltage_display.setText(f"{event.voltages[0]:.5f} V")
-            self.update_led("digital", event.digital)
-            self.update_led("signal", event.signal)
-            self.update_led("power", event.power)
+            # LEDs
+            self.update_led("digital", event.power_state["digital"])
+            self.update_led("signal",  event.power_state["signal"])
+            self.update_led("power",   event.power_state["power"])
+
+            # Voltage display (use v_0)
+            self.text_voltage_display.setText(f"{event.power_state['voltages'][0]:.5f} V")
 
     # -------------------------------------------------------------
     # Cleanup handling (GUI close / Ctrl+C / crash)
