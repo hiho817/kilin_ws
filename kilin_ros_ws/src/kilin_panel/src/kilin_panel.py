@@ -98,6 +98,15 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         # -------------------------------------------------------------
         self.motor_error_latched = False
 
+        # Persistent motor error filter (per-motor consecutive count)
+        self.motor_error_threshold = 10  # consecutive non-zero error codes
+        self.motor_error_count = {}      # key: (module, joint), value: int
+        self.motor_error_last_code = {}  # key: (module, joint), value: last error code
+
+        # Debug log control (avoid spam)
+        self._motor_err_log_last_ns = 0
+        self._MOTOR_ERR_LOG_PERIOD_NS = int(1e9 * 1.0)  # 1 Hz max debug logs
+
         self.node_ui.get_logger().info(f"KilinPanel initialized (mode={self.current_mode})")
 
     # -------------------------------------------------------------
@@ -152,6 +161,7 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         This function runs in the GUI thread via motor_cmd_signal.
         """
         try:
+            # Guard: only update UI in Manual mode
             if self.current_mode != "Manual":
                 return
 
@@ -306,15 +316,15 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         self.handle_send()
 
     # -------------------------------------------------------------
-    # Timeout safety handler
+    # Motor error safety handler
     # -------------------------------------------------------------
     def handle_motor_error_event(self):
-        """Safety fallback: triggered whenever any motor reports an error."""
+        """Safety fallback: triggered whenever any motor reports a confirmed persistent error."""
         if self.motor_error_latched:
             return  # Already handled
         self.motor_error_latched = True
 
-        self.node_ui.get_logger().error("[SAFETY] Motor error detected! Switching to safe mode.")
+        self.node_ui.get_logger().error("[SAFETY] Persistent motor error detected! Switching to safe mode.")
 
         # 1. If currently in Manual mode, force switch back to UI mode
         if self.current_mode == "Manual":
@@ -332,7 +342,7 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         # 3. Publish the Rest command once
         self.handle_send()
 
-        self.node_ui.get_logger().warn("[SAFETY] All motors forced to Rest mode due to motor error.")
+        self.node_ui.get_logger().warn("[SAFETY] All motors forced to Rest mode due to persistent motor error.")
 
     # -------------------------------------------------------------
     # Qt custom events (Power and Motor updates)
@@ -341,7 +351,12 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         """Handle custom Qt events for motor and power updates."""
         if isinstance(event, MotorStateUpdateEvent):
 
-            motor_error_detected = False  # <-- Added flag for motor error detection
+            motor_error_confirmed = False  # confirmed persistent error
+
+            # Throttled debug logging
+            now_ns = self.node_ui.get_clock().now().nanoseconds
+            allow_debug_log = (now_ns - self._motor_err_log_last_ns) >= self._MOTOR_ERR_LOG_PERIOD_NS
+            log_lines = []
 
             for module_name, joints in event.modules_state.items():
                 module_panel = getattr(self, f"module_{module_name.lower()}", None)
@@ -351,15 +366,48 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
                             joint_name, pos, vel, tor, mode, error
                         )
 
-                        # If ANY error code is non-zero → mark motor error detected
-                        if error != 0:
-                            motor_error_detected = True
+                        # -------------------------------------------------
+                        # Persistent error filter (per-motor consecutive count)
+                        # -------------------------------------------------
+                        key = (module_name, joint_name)
 
-            # Trigger safety routine if needed
-            if motor_error_detected:
+                        if error == 0:
+                            # Reset counter on OK
+                            if self.motor_error_count.get(key, 0) != 0 and allow_debug_log:
+                                log_lines.append(f"{module_name}/{joint_name}: recovered (cnt -> 0)")
+                            self.motor_error_count[key] = 0
+                            self.motor_error_last_code[key] = 0
+                        else:
+                            # Count consecutive non-zero errors
+                            prev = self.motor_error_count.get(key, 0)
+                            self.motor_error_count[key] = prev + 1
+
+                            # Track last error code (for debug)
+                            last_code = self.motor_error_last_code.get(key, None)
+                            self.motor_error_last_code[key] = error
+
+                            if allow_debug_log:
+                                # Log only when (a) first error, (b) code changes, or (c) near threshold
+                                if prev == 0 or (last_code is not None and error != last_code) or (self.motor_error_count[key] in [3, 5, 8, self.motor_error_threshold]):
+                                    log_lines.append(
+                                        f"{module_name}/{joint_name}: error={error} cnt={self.motor_error_count[key]}/{self.motor_error_threshold}"
+                                    )
+
+                            # Confirm error only if it persists N times
+                            if self.motor_error_count[key] >= self.motor_error_threshold:
+                                motor_error_confirmed = True
+
+            if allow_debug_log and log_lines:
+                self._motor_err_log_last_ns = now_ns
+                self.node_ui.get_logger().debug("[MotorErrorMonitor] " + " | ".join(log_lines))
+
+            # Trigger safety routine only when error is confirmed
+            if motor_error_confirmed:
                 self.handle_motor_error_event()
             else:
-                self.motor_error_latched = False  # Reset latch if no error
+                # If no motor is currently confirmed in persistent error,
+                # allow future error episodes to trigger again.
+                self.motor_error_latched = False
 
         elif isinstance(event, PowerStateUpdateEvent):
             # LEDs
