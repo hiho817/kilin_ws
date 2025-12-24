@@ -93,6 +93,11 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
 
         self.update_button_states()
 
+        # -------------------------------------------------------------
+        # Motor safety states
+        # -------------------------------------------------------------
+        self.motor_error_latched = False
+
         self.node_ui.get_logger().info(f"KilinPanel initialized (mode={self.current_mode})")
 
     # -------------------------------------------------------------
@@ -147,6 +152,9 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         This function runs in the GUI thread via motor_cmd_signal.
         """
         try:
+            if self.current_mode != "Manual":
+                return
+
             modules = {
                 "A": msg.module_a,
                 "B": msg.module_b,
@@ -300,9 +308,13 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
     # -------------------------------------------------------------
     # Timeout safety handler
     # -------------------------------------------------------------
-    def handle_timeout_event(self):
+    def handle_motor_error_event(self):
         """Safety fallback: triggered whenever any motor reports an error."""
-        self.node_ui.get_logger().error("[SAFETY] Motor timeout detected! Switching to safe mode.")
+        if self.motor_error_latched:
+            return  # Already handled
+        self.motor_error_latched = True
+
+        self.node_ui.get_logger().error("[SAFETY] Motor error detected! Switching to safe mode.")
 
         # 1. If currently in Manual mode, force switch back to UI mode
         if self.current_mode == "Manual":
@@ -320,7 +332,7 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         # 3. Publish the Rest command once
         self.handle_send()
 
-        self.node_ui.get_logger().warn("[SAFETY] All motors forced to Rest mode due to timeout.")
+        self.node_ui.get_logger().warn("[SAFETY] All motors forced to Rest mode due to motor error.")
 
     # -------------------------------------------------------------
     # Qt custom events (Power and Motor updates)
@@ -329,7 +341,7 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         """Handle custom Qt events for motor and power updates."""
         if isinstance(event, MotorStateUpdateEvent):
 
-            timeout_detected = False  # <-- Added flag for timeout detection
+            motor_error_detected = False  # <-- Added flag for motor error detection
 
             for module_name, joints in event.modules_state.items():
                 module_panel = getattr(self, f"module_{module_name.lower()}", None)
@@ -339,13 +351,15 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
                             joint_name, pos, vel, tor, mode, error
                         )
 
-                        # If ANY error code is non-zero → mark timeout
+                        # If ANY error code is non-zero → mark motor error detected
                         if error != 0:
-                            timeout_detected = True
+                            motor_error_detected = True
 
             # Trigger safety routine if needed
-            if timeout_detected:
-                self.handle_timeout_event()
+            if motor_error_detected:
+                self.handle_motor_error_event()
+            else:
+                self.motor_error_latched = False  # Reset latch if no error
 
         elif isinstance(event, PowerStateUpdateEvent):
             # LEDs
