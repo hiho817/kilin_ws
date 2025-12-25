@@ -7,6 +7,7 @@
 #include <sstream>
 #include <vector>
 #include <string>
+#include <cmath>
 
 struct GaitPoint {
     double time;
@@ -204,7 +205,9 @@ private:
         kilin_msgs::msg::LegCmd leg;
 
         // Hip interpolation
-        leg.hip.position = lerp(t, p0.time, p1.time, hip0, hip1);
+        double hip_deg = lerp(t, p0.time, p1.time, hip0, hip1);
+        double hip_rad = hip_deg * M_PI / 180.0;
+        leg.hip.position = hip_rad;
         leg.hip.motor_mode = 4;  // POSITION
         leg.hip.kp = 180.0;
         leg.hip.ki = 0.0;

@@ -308,9 +308,9 @@ min-height: 20px;
      <property name="geometry">
       <rect>
        <x>50</x>
-       <y>40</y>
+       <y>30</y>
        <width>101</width>
-       <height>120</height>
+       <height>151</height>
       </rect>
      </property>
      <layout class="QVBoxLayout" name="verticalLayout_6">
@@ -346,6 +346,13 @@ min-height: 20px;
        <widget class="QPushButton" name="btn_setzero">
         <property name="text">
          <string>Set Zero</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btn_brake">
+        <property name="text">
+         <string>Brake</string>
         </property>
        </widget>
       </item>

@@ -90,6 +90,7 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         self.btn_send.clicked.connect(self.handle_send)
         self.btn_rest.clicked.connect(lambda: self.set_all_motor_mode("Rest"))
         self.btn_setzero.clicked.connect(lambda: self.set_all_motor_mode("Set Zero"))
+        self.btn_brake.clicked.connect(self.apply_brake_preset)
 
         self.update_button_states()
 
@@ -314,6 +315,63 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
                 if index >= 0:
                     combo.setCurrentIndex(index)
         self.handle_send()
+
+    def apply_brake_preset(self):
+        """
+        Brake preset:
+        - Hub: Brake
+        - Steering: Position mode, angle = 0 deg
+        - Hip: Rest
+        Then publish once via handle_send().
+        """
+        modules = [self.module_a, self.module_b, self.module_c, self.module_d]
+
+        for module in modules:
+            # -------------------------
+            # Hip -> Rest
+            # -------------------------
+            hip_mode = getattr(module, "comboBox_hip_mode", None)
+            if hip_mode:
+                idx = hip_mode.findText("Rest")
+                if idx >= 0:
+                    hip_mode.setCurrentIndex(idx)
+
+            # -------------------------
+            # Steering -> Position, pos_cmd = 0 deg
+            # -------------------------
+            steering_mode = getattr(module, "comboBox_steering_mode", None)
+            if steering_mode:
+                idx = steering_mode.findText("Position")
+                if idx < 0:
+                    for cand in ["POSITION", "Pos", "Position Mode"]:
+                        idx = steering_mode.findText(cand)
+                        if idx >= 0:
+                            break
+                if idx >= 0:
+                    steering_mode.setCurrentIndex(idx)
+
+            steering_pos_cmd = getattr(module, "lineEdit_steering_pos_cmd", None)
+            if steering_pos_cmd:
+                steering_pos_cmd.setText("0.0")
+
+            # -------------------------
+            # Hub -> Brake
+            # -------------------------
+            hub_mode = getattr(module, "comboBox_hub_mode", None)
+            if hub_mode:
+                idx = hub_mode.findText("Brake")
+                if idx < 0:
+                    for cand in ["BRAKE", "Brk", "Brake Mode"]:
+                        idx = hub_mode.findText(cand)
+                        if idx >= 0:
+                            break
+                if idx >= 0:
+                    hub_mode.setCurrentIndex(idx)
+
+        self.handle_send()
+        self.node_ui.get_logger().info("[UI] Brake preset applied: hub=Brake, steering=Position@0deg, hip=Rest")
+
+
 
     # -------------------------------------------------------------
     # Motor error safety handler

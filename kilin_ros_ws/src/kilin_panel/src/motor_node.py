@@ -51,7 +51,8 @@ class MotorNode(Node):
                 mode_map = {
                     "rest": 0, "config": 1, "set zero": 2,
                     "hal calibrate": 3, "position mode": 4,
-                    "velocity mode": 5, "torque mode": 6
+                    "velocity mode": 5, "torque mode": 6,
+                    "brake":7
                 }
                 m.motor_mode = mode_map.get(d["mode"].lower(), 0)
 

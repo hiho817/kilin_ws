@@ -1088,6 +1088,11 @@
       <string>Torque Mode</string>
      </property>
     </item>
+    <item>
+     <property name="text">
+      <string>Brake</string>
+     </property>
+    </item>
    </widget>
    <widget class="QTextBrowser" name="text_hub_pos_state">
     <property name="geometry">

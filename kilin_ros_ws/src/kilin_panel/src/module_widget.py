@@ -73,7 +73,8 @@ class ModulePanel(QtWidgets.QWidget, Ui_Form):
             mode_map = {
                 0: "Rest", 1: "Config", 2: "Set Zero",
                 3: "HAL Calibrate", 4: "Position Mode",
-                5: "Velocity Mode", 6: "Torque Mode"
+                5: "Velocity Mode", 6: "Torque Mode",
+                7: "Brake"
             }
             getattr(self, f"text_{name}_mode_state").setText(
                 mode_map.get(mode, str(mode))
