@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>kilin_logger</name>
+  <version>0.0.0</version>
+  <description>Kilin logger: log /motor/state and /power/state into a single CSV file.</description>
+
+  <maintainer email="ian20030201@gmail.com">ian920201</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>kilin_msgs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -18,6 +18,7 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
 
     # Qt signal to safely update UI from ROS callbacks (runs in GUI thread)
     motor_cmd_signal = QtCore.pyqtSignal(object)
+    BRAKE_TORQUE = 20.0
 
     def __init__(self):
         super().__init__()
@@ -367,6 +368,9 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
                             break
                 if idx >= 0:
                     hub_mode.setCurrentIndex(idx)
+            hub_tor_cmd = getattr(module, "lineEdit_hub_tor_cmd", None)
+            if hub_tor_cmd:
+                hub_tor_cmd.setText(f"{self.BRAKE_TORQUE:.1f}") 
 
         self.handle_send()
         self.node_ui.get_logger().info("[UI] Brake preset applied: hub=Brake, steering=Position@0deg, hip=Rest")
@@ -389,18 +393,58 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
             self.node_ui.get_logger().warn("[SAFETY] Forced switch to UI control mode.")
             self.comboBox_input.setCurrentText("UI")
 
-        # 2. Set all motors in UI to Rest mode
+        # 2. Apply BRAKE preset (UI state):
+        #    hip: Rest
+        #    steering: Position, pos_cmd = 0 deg
+        #    hub: Brake
         for module in [self.module_a, self.module_b, self.module_c, self.module_d]:
-            for motor in ["hip", "steering", "hub"]:
-                combo = getattr(module, f"comboBox_{motor}_mode")
-                index = combo.findText("Rest")
-                if index >= 0:
-                    combo.setCurrentIndex(index)
 
-        # 3. Publish the Rest command once
+            # Hip -> Rest
+            hip_mode = getattr(module, "comboBox_hip_mode", None)
+            if hip_mode:
+                idx = hip_mode.findText("Rest")
+                if idx >= 0:
+                    hip_mode.setCurrentIndex(idx)
+
+            # Steering -> Position, pos_cmd = 0 deg
+            steering_mode = getattr(module, "comboBox_steering_mode", None)
+            if steering_mode:
+                idx = steering_mode.findText("Position")
+                if idx < 0:
+                    for cand in ["POSITION", "Pos", "Position Mode"]:
+                        idx = steering_mode.findText(cand)
+                        if idx >= 0:
+                            break
+                if idx >= 0:
+                    steering_mode.setCurrentIndex(idx)
+
+            steering_pos_cmd = getattr(module, "lineEdit_steering_pos_cmd", None)
+            if steering_pos_cmd:
+                steering_pos_cmd.setText("0.0")
+
+            # Hub -> Brake
+            hub_mode = getattr(module, "comboBox_hub_mode", None)
+            if hub_mode:
+                idx = hub_mode.findText("Brake")
+                if idx < 0:
+                    for cand in ["BRAKE", "Brk", "Brake Mode"]:
+                        idx = hub_mode.findText(cand)
+                        if idx >= 0:
+                            break
+                if idx >= 0:
+                    hub_mode.setCurrentIndex(idx)
+            hub_tor_cmd = getattr(module, "lineEdit_hub_tor_cmd", None)
+            if hub_tor_cmd:
+                hub_tor_cmd.setText(f"{self.BRAKE_TORQUE:.1f}") 
+
+        # 3. Publish the Brake preset command once
         self.handle_send()
 
-        self.node_ui.get_logger().warn("[SAFETY] All motors forced to Rest mode due to persistent motor error.")
+        self.node_ui.get_logger().warn(
+            "[SAFETY] Brake preset applied due to persistent motor error "
+            "(hip=Rest, steering=Position@0deg, hub=Brake)."
+        )
+
 
     # -------------------------------------------------------------
     # Qt custom events (Power and Motor updates)
