@@ -170,14 +170,14 @@ private:
         fillHeader(msg);
 
         msg.module_a = buildLegCmd(t, p0, p1,
-                                   p0.a_hip_pos * (-1), p1.a_hip_pos * (-1),
+                                   p0.a_hip_pos, p1.a_hip_pos,
                                    p0.a_hub_vel, p1.a_hub_vel,
-                                   p0.a_hub_mode);
+                                   p0.a_hub_mode, true);
 
         msg.module_b = buildLegCmd(t, p0, p1,
-                                   p0.b_hip_pos * (-1), p1.b_hip_pos * (-1),
+                                   p0.b_hip_pos, p1.b_hip_pos,
                                    p0.b_hub_vel, p1.b_hub_vel,
-                                   p0.b_hub_mode);
+                                   p0.b_hub_mode, true);
 
         msg.module_c = buildLegCmd(t, p0, p1,
                                    p0.c_hip_pos, p1.c_hip_pos,
@@ -200,12 +200,16 @@ private:
         const GaitPoint &p0, const GaitPoint &p1,
         double hip0, double hip1,
         double hub_v0, double hub_v1,
-        double hub_mode0
+        double hub_mode0,
+        bool is_flip = false
     ) {
         kilin_msgs::msg::LegCmd leg;
 
         // Hip interpolation
         double hip_deg = lerp(t, p0.time, p1.time, hip0, hip1);
+        if (is_flip) {
+            hip_deg = -hip_deg;
+        }
         double hip_rad = hip_deg * M_PI / 180.0;
         leg.hip.position = hip_rad;
         leg.hip.motor_mode = 4;  // POSITION
