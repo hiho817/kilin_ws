@@ -213,7 +213,7 @@ private:
         double hip_rad = hip_deg * M_PI / 180.0;
         leg.hip.position = hip_rad;
         leg.hip.motor_mode = 4;  // POSITION
-        leg.hip.kp = 180.0;
+        leg.hip.kp = 350.0;
         leg.hip.ki = 0.0;
         leg.hip.kd = 5.0;
 

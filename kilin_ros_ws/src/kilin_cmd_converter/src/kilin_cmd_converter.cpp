@@ -8,6 +8,7 @@
 #include <map>
 #include <csignal>
 #include <thread>
+#include <algorithm> 
 
 struct ModulePos {
     double Xi;
@@ -28,6 +29,22 @@ public:
         // Steering speed limit (rad/s)
         steering_rate_limit =
             declare_parameter<double>("steering_rate_limit", 2.0);
+
+        // ============================================================
+        // Steering-wheel coordination (vy gating)
+        //   - Use steering tracking error to scale ONLY global vy
+        //   - Avoid "stop and wait" feeling by:
+        //       (1) g_min floor
+        //       (2) g slew-rate limiting (down slow, up fast)
+        //       (3) aggregate by mean (not min)
+        // ============================================================
+        e_full  = declare_parameter<double>("e_full", 0.10);   // rad ~ 5.7 deg
+        e_stop  = declare_parameter<double>("e_stop", 0.52);   // rad ~ 30 deg
+        g_min   = declare_parameter<double>("g_min", 0.30);    // keep some lateral authority
+        dg_down = declare_parameter<double>("dg_down", 1.0);   // 1/s (g decreases)
+        dg_up   = declare_parameter<double>("dg_up",   2.5);   // 1/s (g increases)
+
+        prev_g = 1.0;
 
         // Module coordinates (A: FL, B: FR, C: RL, D: RR)
         modules["A"] = { +0.5 * L_base, +0.5 * W_base };
@@ -97,12 +114,98 @@ private:
             return a;
         };
 
-        // Iterate modules A,B,C,D
+        const double dt = 0.01;
+
+        // ============================================================
+        // Pass 1: compute g from steering tracking error
+        //   - Evaluate how well steering can follow "target_angle" under rate limit
+        //   - Convert each module's error to gi ∈ [0,1]
+        //   - Aggregate by mean (avoid min -> less "stuck" feeling)
+        //   - Apply g_min floor + slew limiting
+        // ============================================================
+        double max_delta = steering_rate_limit * dt;
+
+        double g_sum = 0.0;
+        int n_mod = 0;
+
+        // Iterate modules A,B,C,D (evaluate error only)
+        for (auto &[key, pos] : modules) {
+
+            // Local velocities (use ORIGINAL vy)
+            double Vx = vx - wz * pos.Yi;
+            double Vy = vy + wz * pos.Xi;
+
+            // Target steering direction in [-π, π]
+            double target_angle = std::atan2(Vy, Vx);
+
+            // Previous steering angle
+            double prev = wrap_to_pi(prev_steering_angle[key]);
+
+            // =====================================================
+            // Minimal steering angle logic (for error evaluation):
+            // Always move within ±90°, wheel reverses if needed.
+            // =====================================================
+            double diff = wrap_to_pi(target_angle - prev);
+
+            // If shortest rotation is > 90°, flip direction
+            if (std::fabs(diff) > M_PI_2) {
+                target_angle = wrap_to_pi(target_angle + (diff > 0 ? -M_PI : M_PI));
+                // wheel reverse not needed here (error-only pass)
+            }
+
+            // =====================================================
+            // Rate-limited steering command (prediction)
+            // =====================================================
+            double new_angle = prev + std::clamp(
+                wrap_to_pi(target_angle - prev),
+                -max_delta, max_delta
+            );
+            new_angle = wrap_to_pi(new_angle);
+
+            // Remaining tracking error after rate limit
+            double err = std::fabs(wrap_to_pi(target_angle - new_angle));
+
+            // Map err -> gi in [0,1]
+            double gi = 0.0;
+            if (err <= e_full) gi = 1.0;
+            else if (err >= e_stop) gi = 0.0;
+            else gi = (e_stop - err) / (e_stop - e_full);
+
+            g_sum += gi;
+            n_mod++;
+        }
+
+        // Desired g (aggregate by mean)
+        double g_des = (n_mod > 0) ? (g_sum / n_mod) : 1.0;
+        g_des = std::clamp(g_des, 0.0, 1.0);
+
+        // Keep some lateral authority (avoid full stop feeling)
+        g_des = std::max(g_des, g_min);
+
+        // Slew limit g (down slower, up faster)
+        double dg = g_des - prev_g;
+        double dg_lim = 0.0;
+        if (dg >= 0.0) dg_lim = std::min(dg, dg_up * dt);
+        else           dg_lim = std::max(dg, -dg_down * dt);
+
+        double g = std::clamp(prev_g + dg_lim, 0.0, 1.0);
+        prev_g = g;
+
+        // ============================================================
+        // scale ONLY global vy (keep vx unchanged)
+        //   - This prevents "stop and wait steering" behavior
+        //   - Lateral motion gradually ramps in as steering aligns
+        // ============================================================
+        double vy_eff = g * vy;
+
+        // ============================================================
+        // Pass 2: generate final wheel + steering commands using vy_eff
+        // ============================================================
         for (auto &[key, pos] : modules) {
 
             // Local velocities
             double Vx = vx - wz * pos.Yi;
-            double Vy = vy + wz * pos.Xi;
+            double Vy = vy_eff + wz * pos.Xi;
 
             // Wheel speed (m/s → RPM → gearbox ×10)
             double wheel_speed = std::sqrt(Vx*Vx + Vy*Vy) / R_w;
@@ -128,9 +231,6 @@ private:
             // =====================================================
             // Steering rate-limit (dt fixed = 0.01)
             // =====================================================
-            double dt = 0.01;
-            double max_delta = steering_rate_limit * dt;
-
             double new_angle = prev + std::clamp(
                 wrap_to_pi(raw_angle - prev),
                 -max_delta, max_delta
@@ -154,7 +254,7 @@ private:
             // -----------------------------------------------------
             kilin_msgs::msg::MotorCmd hip;
             hip.motor_mode = POSITION_MODE;
-            hip.kp = 180.0;
+            hip.kp = 350.0;
             hip.ki = 0.0;
             hip.kd = 5.0;
 
@@ -218,6 +318,11 @@ private:
     double L_base, W_base, R_w;
     double vmax, wmax;
     double steering_rate_limit;
+
+    // vy gating
+    double e_full, e_stop, g_min;
+    double dg_down, dg_up;
+    double prev_g;
 
     std::map<std::string, ModulePos> modules;
     std::map<std::string, double> prev_steering_angle;
