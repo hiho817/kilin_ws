@@ -325,6 +325,11 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         - Hip: Rest
         Then publish once via handle_send().
         """
+
+        if self.current_mode == "Manual":
+            self.node_ui.get_logger().warn("[SAFETY] Forced switch to UI control mode.")
+            self.comboBox_input.setCurrentText("UI")
+
         modules = [self.module_a, self.module_b, self.module_c, self.module_d]
 
         for module in modules:
