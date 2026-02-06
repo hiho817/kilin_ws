@@ -23,7 +23,15 @@ def generate_launch_description():
         description='Directory that stores CSV files (default: ~/kilin_ws/csv)'
     )
 
+    # [新增] 宣告 use_sim_time 參數，預設為 false (實機模式)
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulation (Isaac Sim) clock if true'
+    )
+
     csv_name = LaunchConfiguration('csv_name')
+    use_sim_time = LaunchConfiguration('use_sim_time')
     csv_dir  = LaunchConfiguration('csv_dir')
 
     csv_full_path = PathJoinSubstitution([
@@ -33,6 +41,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         csv_name_arg,
+        use_sim_time_arg,
         csv_dir_arg,
         Node(
             package='kilin_csv_control',
@@ -41,7 +50,8 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 {"csv_path": csv_full_path},
-                {"rate_hz": 200.0}
+                {"rate_hz": 200.0},
+                {"use_sim_time": use_sim_time}  # 傳遞 use_sim_time 給 Node
             ]
         )
     ])

@@ -39,11 +39,17 @@ public:
         pub_motor = this->create_publisher<kilin_msgs::msg::MotorCmdStamped>(
             "/kilin/motor_cmd_raw", 10);
 
-        start_walltime = this->get_clock()->now();
+        start_time_ = this->get_clock()->now();
 
         RCLCPP_INFO(get_logger(), "CSV playback starting in %.1f seconds...", delay_start_sec);
+        RCLCPP_INFO(get_logger(), "Note: If use_sim_time:=true, playback will sync with /clock from Isaac Sim.");
 
-        timer = this->create_wall_timer(
+        // 使用 rclcpp::create_timer 而非 create_wall_timer
+        // 當 use_sim_time:=true 時，會跟隨 /clock (模擬時間)
+        // 當 use_sim_time:=false 時，會跟隨系統時間 (實機)
+        timer = rclcpp::create_timer(
+            this,
+            this->get_clock(),
             std::chrono::microseconds((int)(1e6 / rate_hz)),
             std::bind(&KilinGaitPlayer::update, this)
         );
@@ -125,12 +131,20 @@ private:
     void update()
     {
         rclcpp::Time now = this->get_clock()->now();
-        double wall_elapsed = (now - start_walltime).seconds();
+        
+        // 檢查時間是否有效 (use_sim_time 模式下，/clock 可能尚未發布)
+        if (now.seconds() == 0.0) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *this->get_clock(), 2000,
+                "Waiting for valid clock... (Is /clock being published?)");
+            return;
+        }
+        
+        double elapsed = (now - start_time_).seconds();
 
         // --------------------------
         // Delay start
         // --------------------------
-        if (wall_elapsed < delay_start_sec) {
+        if (elapsed < delay_start_sec) {
             return;
         }
 
@@ -172,12 +186,12 @@ private:
         msg.module_a = buildLegCmd(t, p0, p1,
                                    p0.a_hip_pos, p1.a_hip_pos,
                                    p0.a_hub_vel, p1.a_hub_vel,
-                                   p0.a_hub_mode, true);
+                                   p0.a_hub_mode);
 
         msg.module_b = buildLegCmd(t, p0, p1,
                                    p0.b_hip_pos, p1.b_hip_pos,
                                    p0.b_hub_vel, p1.b_hub_vel,
-                                   p0.b_hub_mode, true);
+                                   p0.b_hub_mode);
 
         msg.module_c = buildLegCmd(t, p0, p1,
                                    p0.c_hip_pos, p1.c_hip_pos,
@@ -254,7 +268,7 @@ private:
     double rate_hz;
     double delay_start_sec;
 
-    rclcpp::Time start_walltime;
+    rclcpp::Time start_time_;
     rclcpp::Time playback_start_time;
     bool started = false;
 };
