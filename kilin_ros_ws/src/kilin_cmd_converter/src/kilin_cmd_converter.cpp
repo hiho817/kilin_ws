@@ -1,4 +1,6 @@
 #include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/bool.hpp"
+#include "std_msgs/msg/u_int8.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "kilin_msgs/msg/motor_cmd_stamped.hpp"
 #include "kilin_msgs/msg/leg_cmd.hpp"
@@ -8,7 +10,8 @@
 #include <map>
 #include <csignal>
 #include <thread>
-#include <algorithm> 
+#include <algorithm>
+#include <atomic>
 
 struct ModulePos {
     double Xi;
@@ -17,7 +20,7 @@ struct ModulePos {
 
 class KilinCmdConverter : public rclcpp::Node {
 public:
-    KilinCmdConverter() : Node("kilin_cmd_converter") 
+    KilinCmdConverter() : Node("kilin_cmd_converter")
     {
         // Parameters
         L_base = declare_parameter<double>("L_base", 0.48);
@@ -28,7 +31,11 @@ public:
 
         // Steering speed limit (rad/s)
         steering_rate_limit =
-            declare_parameter<double>("steering_rate_limit", 2.0);
+            declare_parameter<double>("steering_rate_limit", 1000.0);
+
+        // Debug switch: module rest mask
+        enable_rest_mask_ =
+            declare_parameter<bool>("enable_rest_mask", false);
 
         // ============================================================
         // Steering-wheel coordination (vy gating)
@@ -63,12 +70,30 @@ public:
             "/kilin/cmd_vel", 10,
             std::bind(&KilinCmdConverter::cmdVelCallback, this, std::placeholders::_1));
 
+        // Brake request (from kilin_joystick)
+        sub_brake = create_subscription<std_msgs::msg::Bool>(
+            "/kilin/brake_request", 10,
+            std::bind(&KilinCmdConverter::brakeCallback, this, std::placeholders::_1));
+
+        // Module rest mask (from kilin_joystick) - only in debug mode
+        if (enable_rest_mask_) {
+            sub_rest_mask = create_subscription<std_msgs::msg::UInt8>(
+                "/kilin/module_rest_mask", 10,
+                std::bind(&KilinCmdConverter::restMaskCallback, this, std::placeholders::_1));
+
+            RCLCPP_WARN(get_logger(), "REST MASK enabled (debug feature).");
+        }
+
         pub_motor = create_publisher<kilin_msgs::msg::MotorCmdStamped>(
             "/kilin/motor_cmd_raw", 10);
 
-        RCLCPP_INFO(get_logger(), 
-            "KilinCmdConverter started (rate_limit = %.2f rad/s)", 
+        RCLCPP_INFO(get_logger(),
+            "KilinCmdConverter started (rate_limit = %.2f rad/s)",
             steering_rate_limit);
+
+        RCLCPP_INFO(get_logger(),
+            "Brake modes fixed: hip_rest_mode=%d, hub_brake_mode=%d",
+            HIP_REST_MODE, HUB_BRAKE_MODE);
 
         instance_ = this;
         std::signal(SIGINT, signal_handler);
@@ -92,10 +117,101 @@ public:
 private:
 
     // ============================================================
+    // Motor modes (FPGA definitions)
+    // ============================================================
+    static constexpr int HIP_REST_MODE  = 0;
+    static constexpr int HUB_BRAKE_MODE = 7;
+    static constexpr int POSITION_MODE  = 4;
+    static constexpr int VELOCITY_MODE  = 5;
+
+    // ============================================================
+    // Brake request callback
+    // ============================================================
+    void brakeCallback(const std_msgs::msg::Bool::SharedPtr msg)
+    {
+        brake_active.store(msg->data, std::memory_order_relaxed);
+    }
+
+    // ============================================================
+    // Rest mask callback (debug only)
+    //   - bit0=A bit1=B bit2=C bit3=D
+    // ============================================================
+    void restMaskCallback(const std_msgs::msg::UInt8::SharedPtr msg)
+    {
+        rest_mask.store(msg->data, std::memory_order_relaxed);
+    }
+
+    // ============================================================
+    // Publish brake motor command
+    // ============================================================
+    void publishBrakeCommand()
+    {
+        kilin_msgs::msg::MotorCmdStamped out_msg;
+        fillHeader(out_msg);
+
+        kilin_msgs::msg::MotorCmd hip;
+        hip.motor_mode = HIP_REST_MODE;
+
+        kilin_msgs::msg::MotorCmd steering;
+        steering.motor_mode = POSITION_MODE;
+        steering.position = 0.0;
+
+        kilin_msgs::msg::MotorCmd hub;
+        hub.motor_mode = HUB_BRAKE_MODE;
+
+        kilin_msgs::msg::LegCmd leg;
+        leg.hip = hip;
+        leg.steering = steering;
+        leg.hub = hub;
+
+        out_msg.module_a = leg;
+        out_msg.module_b = leg;
+        out_msg.module_c = leg;
+        out_msg.module_d = leg;
+
+        prev_steering_angle["A"] = 0.0;
+        prev_steering_angle["B"] = 0.0;
+        prev_steering_angle["C"] = 0.0;
+        prev_steering_angle["D"] = 0.0;
+
+        pub_motor->publish(out_msg);
+    }
+
+    // ============================================================
+    // Apply module rest override (debug only)
+    // ============================================================
+    void applyRestOverride(const std::string &key, kilin_msgs::msg::LegCmd &leg)
+    {
+        if (!enable_rest_mask_) return;
+
+        uint8_t mask = rest_mask.load(std::memory_order_relaxed);
+
+        bool rest_this = false;
+        if (key == "A") rest_this = (mask & 0x01);
+        if (key == "B") rest_this = (mask & 0x02);
+        if (key == "C") rest_this = (mask & 0x04);
+        if (key == "D") rest_this = (mask & 0x08);
+
+        if (!rest_this) return;
+
+        leg.hip.motor_mode = HIP_REST_MODE;
+        leg.steering.motor_mode = HIP_REST_MODE;
+        leg.hub.motor_mode = HIP_REST_MODE;
+
+        // Keep steering memory consistent if module is forced to rest
+        prev_steering_angle[key] = 0.0;
+    }
+
+    // ============================================================
     // /cmd_vel → wheel + steering conversion
     // ============================================================
-    void cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg) 
+    void cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
     {
+        if (brake_active.load(std::memory_order_relaxed)) {
+            publishBrakeCommand();
+            return;
+        }
+
         // Clamp input
         double vx = std::clamp(msg->linear.x,  -vmax, vmax);
         double vy = std::clamp(msg->linear.y,  -vmax, vmax);
@@ -104,10 +220,6 @@ private:
         kilin_msgs::msg::MotorCmdStamped out_msg;
         fillHeader(out_msg);
 
-        const int POSITION_MODE = 4;
-        const int VELOCITY_MODE = 5;
-
-        // Utility for angle wrapping
         auto wrap_to_pi = [](double a){
             while (a >  M_PI) a -= 2.0*M_PI;
             while (a < -M_PI) a += 2.0*M_PI;
@@ -116,13 +228,7 @@ private:
 
         const double dt = 0.01;
 
-        // ============================================================
-        // Pass 1: compute g from steering tracking error
-        //   - Evaluate how well steering can follow "target_angle" under rate limit
-        //   - Convert each module's error to gi ∈ [0,1]
-        //   - Aggregate by mean (avoid min -> less "stuck" feeling)
-        //   - Apply g_min floor + slew limiting
-        // ============================================================
+        // Pass 1: compute g
         double max_delta = steering_rate_limit * dt;
 
         double g_sum = 0.0;
@@ -198,9 +304,7 @@ private:
         // ============================================================
         double vy_eff = g * vy;
 
-        // ============================================================
-        // Pass 2: generate final wheel + steering commands using vy_eff
-        // ============================================================
+        // Pass 2: generate final commands
         for (auto &[key, pos] : modules) {
 
             // Local velocities
@@ -225,7 +329,7 @@ private:
             // If shortest rotation is > 90°, flip direction
             if (std::fabs(diff) > M_PI_2) {
                 raw_angle = wrap_to_pi(raw_angle + (diff > 0 ? -M_PI : M_PI));
-                wheel_speed = -wheel_speed;   // reverse wheel direction
+                wheel_speed = -wheel_speed;
             }
 
             // =====================================================
@@ -271,6 +375,9 @@ private:
             leg.steering = steering;
             leg.hub = hub;
 
+            // Debug feature: per-module rest override
+            applyRestOverride(key, leg);
+
             if (key == "A")      out_msg.module_a = leg;
             else if (key == "B") out_msg.module_b = leg;
             else if (key == "C") out_msg.module_c = leg;
@@ -296,7 +403,7 @@ private:
         fillHeader(msg);
 
         kilin_msgs::msg::MotorCmd zero;
-        zero.motor_mode = 5;   // velocity mode
+        zero.motor_mode = VELOCITY_MODE;
         zero.velocity = 0.0;
 
         kilin_msgs::msg::LegCmd leg;
@@ -319,6 +426,15 @@ private:
     double vmax, wmax;
     double steering_rate_limit;
 
+    // debug switch
+    bool enable_rest_mask_ = false;
+
+    // brake
+    std::atomic<bool> brake_active{false};
+
+    // module rest mask (debug)
+    std::atomic<uint8_t> rest_mask{0};
+
     // vy gating
     double e_full, e_stop, g_min;
     double dg_down, dg_up;
@@ -328,6 +444,8 @@ private:
     std::map<std::string, double> prev_steering_angle;
 
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_cmdvel;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_brake;
+    rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr sub_rest_mask;
     rclcpp::Publisher<kilin_msgs::msg::MotorCmdStamped>::SharedPtr pub_motor;
 
     static KilinCmdConverter *instance_;
@@ -335,10 +453,6 @@ private:
 
 KilinCmdConverter* KilinCmdConverter::instance_ = nullptr;
 
-
-// ============================================================
-// Main
-// ============================================================
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);

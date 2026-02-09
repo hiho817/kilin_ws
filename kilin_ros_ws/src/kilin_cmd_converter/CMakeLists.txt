@@ -8,6 +8,7 @@ endif()
 # Dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(kilin_msgs REQUIRED)
 
@@ -15,6 +16,7 @@ find_package(kilin_msgs REQUIRED)
 add_executable(kilin_cmd_converter src/kilin_cmd_converter.cpp)
 ament_target_dependencies(kilin_cmd_converter
   rclcpp
+  std_msgs
   geometry_msgs
   kilin_msgs
 )

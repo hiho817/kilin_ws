@@ -10,6 +10,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 
 # ----------------------------------------
@@ -20,6 +21,7 @@ add_executable(kilin_joystick src/kilin_joystick.cpp)
 ament_target_dependencies(kilin_joystick
   rclcpp
   sensor_msgs
+  std_msgs
   geometry_msgs
 )
 
@@ -36,5 +38,5 @@ install(DIRECTORY launch/
   DESTINATION share/${PROJECT_NAME}/launch
 )
 
-ament_export_dependencies(rclcpp sensor_msgs geometry_msgs)
+ament_export_dependencies(rclcpp sensor_msgs std_msgs geometry_msgs)
 ament_package()

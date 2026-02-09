@@ -25,7 +25,7 @@ def launch_setup(context, *args, **kwargs):
             'vmax': vmax,
             'wmax': 2.0,
             'deadzone': 0.1,
-            'enable_rest_mask': False
+            'enable_rest_mask': True
         }]
     )
 
@@ -37,7 +37,7 @@ def launch_setup(context, *args, **kwargs):
         parameters=[{
             'vmax': vmax,
             'wmax': 2.0,
-            'enable_rest_mask': False
+            'enable_rest_mask': True
         }]
     )
 
