@@ -23,7 +23,7 @@ def generate_launch_description():
         description='Directory that stores CSV files (default: ~/kilin_ws/csv)'
     )
 
-    # [新增] 宣告 use_sim_time 參數，預設為 false (實機模式)
+    # [Added] Declare use_sim_time parameter, default false (real robot mode)
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time',
         default_value='false',
@@ -51,7 +51,7 @@ def generate_launch_description():
             parameters=[
                 {"csv_path": csv_full_path},
                 {"rate_hz": 200.0},
-                {"use_sim_time": use_sim_time}  # 傳遞 use_sim_time 給 Node
+                {"use_sim_time": use_sim_time}  # Pass use_sim_time to the Node
             ]
         )
     ])

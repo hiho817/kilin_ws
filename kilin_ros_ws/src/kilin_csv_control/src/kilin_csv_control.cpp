@@ -20,8 +20,7 @@ struct GaitPoint {
 
 class KilinGaitPlayer : public rclcpp::Node {
 public:
-    KilinGaitPlayer() : Node("kilin_csv_control")
-    {
+    KilinGaitPlayer() : Node("kilin_csv_control") {
         this->declare_parameter<std::string>("csv_path", "gait.csv");
         this->declare_parameter<double>("rate_hz", 200.0);
         this->declare_parameter<double>("delay_start_sec", 3.0);
@@ -44,9 +43,9 @@ public:
         RCLCPP_INFO(get_logger(), "CSV playback starting in %.1f seconds...", delay_start_sec);
         RCLCPP_INFO(get_logger(), "Note: If use_sim_time:=true, playback will sync with /clock from Isaac Sim.");
 
-        // 使用 rclcpp::create_timer 而非 create_wall_timer
-        // 當 use_sim_time:=true 時，會跟隨 /clock (模擬時間)
-        // 當 use_sim_time:=false 時，會跟隨系統時間 (實機)
+        // Use rclcpp::create_timer instead of create_wall_timer
+        // When use_sim_time:=true, it follows /clock (sim time)
+        // When use_sim_time:=false, it follows system time (real robot)
         timer = rclcpp::create_timer(
             this,
             this->get_clock(),
@@ -59,8 +58,7 @@ private:
     // ============================================================
     // CSV Loader
     // ============================================================
-    bool loadCSV(const std::string &path)
-    {
+    bool loadCSV(const std::string &path) {
         std::ifstream file(path);
         if (!file.is_open()) {
             return false;
@@ -128,11 +126,10 @@ private:
     // ============================================================
     // Main Control Loop
     // ============================================================
-    void update()
-    {
+    void update() {
         rclcpp::Time now = this->get_clock()->now();
         
-        // 檢查時間是否有效 (use_sim_time 模式下，/clock 可能尚未發布)
+        // Check whether time is valid (in use_sim_time mode, /clock may not be published yet)
         if (now.seconds() == 0.0) {
             RCLCPP_WARN_THROTTLE(get_logger(), *this->get_clock(), 2000,
                 "Waiting for valid clock... (Is /clock being published?)");
@@ -213,7 +210,7 @@ private:
         double t,
         const GaitPoint &p0, const GaitPoint &p1,
         double hip0, double hip1,
-        double hub_v0, double hub_v1,
+        double hub_v0,
         double hub_mode0,
         bool is_flip = false
     ) {
@@ -245,8 +242,7 @@ private:
     // ============================================================
     // Header
     // ============================================================
-    void fillHeader(kilin_msgs::msg::MotorCmdStamped &msg)
-    {
+    void fillHeader(kilin_msgs::msg::MotorCmdStamped &msg) {
         static uint32_t seq = 0;
         msg.header.seq = seq++;
         auto now = this->get_clock()->now();
@@ -273,8 +269,7 @@ private:
     bool started = false;
 };
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
     rclcpp::spin(std::make_shared<KilinGaitPlayer>());
     rclcpp::shutdown();

@@ -15,8 +15,7 @@ namespace fs = std::filesystem;
 
 class KilinLogger : public rclcpp::Node {
 public:
-    KilinLogger() : Node("kilin_logger")
-    {
+    KilinLogger() : Node("kilin_logger") {
         // ============================================================
         // Parameters
         // ============================================================
@@ -110,8 +109,7 @@ public:
         RCLCPP_INFO(get_logger(), "kilin_logger started.");
     }
 
-    ~KilinLogger() override
-    {
+    ~KilinLogger() override {
         closeFile_();
     }
 
@@ -119,13 +117,11 @@ private:
     // ============================================================
     // Utils
     // ============================================================
-    static double toTimeSec_(int32_t sec, uint32_t nsec)
-    {
+    static double toTimeSec_(int32_t sec, uint32_t nsec) {
         return static_cast<double>(sec) + static_cast<double>(nsec) * 1e-9;
     }
 
-    std::string makeDateFolder_()
-    {
+    std::string makeDateFolder_() {
         std::time_t t = std::time(nullptr);
         std::tm tm{};
         localtime_r(&t, &tm);
@@ -135,8 +131,7 @@ private:
         return oss.str();
     }
 
-    fs::path makeUniquePath_(const fs::path &p)
-    {
+    fs::path makeUniquePath_(const fs::path &p) {
         if (!fs::exists(p)) return p;
 
         fs::path dir = p.parent_path();
@@ -152,8 +147,7 @@ private:
         return dir / (stem + "_overflow" + ext);
     }
 
-    fs::path getKilinWsLogsDir_()
-    {
+    fs::path getKilinWsLogsDir_() {
         // Expect:
         //   .../kilin_ws/kilin_ros_ws/src/kilin_logger/src/kilin_logger.cpp
         // We search for folder named "kilin_ws"
@@ -178,8 +172,7 @@ private:
     }
 
 
-    void closeFile_()
-    {
+    void closeFile_() {
         if (closed) return;
         closed = true;
 
@@ -192,8 +185,7 @@ private:
     // ============================================================
     // CSV Header
     // ============================================================
-    void writeHeader_()
-    {
+    void writeHeader_() {
         // time (motor)
         file << "motor_seq,motor_sec,motor_nanosec,motor_time_sec";
 
@@ -223,8 +215,7 @@ private:
     // ============================================================
     // Power cache
     // ============================================================
-    void onPowerState_(const kilin_msgs::msg::PowerStateStamped::SharedPtr msg)
-    {
+    void onPowerState_(const kilin_msgs::msg::PowerStateStamped::SharedPtr msg) {
         if (closed) return;
 
         last_power_valid = true;
@@ -249,8 +240,7 @@ private:
     // ============================================================
     // Main logging (triggered by motor/state)
     // ============================================================
-    void onMotorState_(const kilin_msgs::msg::MotorStateStamped::SharedPtr msg)
-    {
+    void onMotorState_(const kilin_msgs::msg::MotorStateStamped::SharedPtr msg) {
         if (closed) return;
 
         // ----------------------------
@@ -341,8 +331,7 @@ private:
     std::array<double, 24> last_vi{}; // [v0,i0,v1,i1,...,v11,i11]
 };
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
     rclcpp::spin(std::make_shared<KilinLogger>());
     rclcpp::shutdown();

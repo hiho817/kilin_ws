@@ -20,8 +20,7 @@ struct ModulePos {
 
 class KilinCmdConverter : public rclcpp::Node {
 public:
-    KilinCmdConverter() : Node("kilin_cmd_converter")
-    {
+    KilinCmdConverter() : Node("kilin_cmd_converter") {
         // Parameters
         L_base = declare_parameter<double>("L_base", 0.48);
         W_base = declare_parameter<double>("W_base", 0.4925);
@@ -59,7 +58,7 @@ public:
         modules["C"] = { -0.5 * L_base, +0.5 * W_base };
         modules["D"] = { -0.5 * L_base, -0.5 * W_base };
 
-        // Initialize steering memory
+        // Initialize steering memory (continuous, start from 0 after set-zero)
         prev_steering_angle["A"] = 0.0;
         prev_steering_angle["B"] = 0.0;
         prev_steering_angle["C"] = 0.0;
@@ -125,10 +124,15 @@ private:
     static constexpr int VELOCITY_MODE  = 5;
 
     // ============================================================
+    // Steering safety bound (prevent cable twisting)
+    //   - You said: allow at most one turn forward/backward
+    // ============================================================
+    static constexpr double STEER_BOUND = 2.0 * M_PI;   // ±2π
+
+    // ============================================================
     // Brake request callback
     // ============================================================
-    void brakeCallback(const std_msgs::msg::Bool::SharedPtr msg)
-    {
+    void brakeCallback(const std_msgs::msg::Bool::SharedPtr msg) {
         brake_active.store(msg->data, std::memory_order_relaxed);
     }
 
@@ -136,16 +140,14 @@ private:
     // Rest mask callback (debug only)
     //   - bit0=A bit1=B bit2=C bit3=D
     // ============================================================
-    void restMaskCallback(const std_msgs::msg::UInt8::SharedPtr msg)
-    {
+    void restMaskCallback(const std_msgs::msg::UInt8::SharedPtr msg) {
         rest_mask.store(msg->data, std::memory_order_relaxed);
     }
 
     // ============================================================
     // Publish brake motor command
     // ============================================================
-    void publishBrakeCommand()
-    {
+    void publishBrakeCommand() {
         kilin_msgs::msg::MotorCmdStamped out_msg;
         fillHeader(out_msg);
 
@@ -169,6 +171,7 @@ private:
         out_msg.module_c = leg;
         out_msg.module_d = leg;
 
+        // Reset steering memory to 0 (continuous)
         prev_steering_angle["A"] = 0.0;
         prev_steering_angle["B"] = 0.0;
         prev_steering_angle["C"] = 0.0;
@@ -180,8 +183,7 @@ private:
     // ============================================================
     // Apply module rest override (debug only)
     // ============================================================
-    void applyRestOverride(const std::string &key, kilin_msgs::msg::LegCmd &leg)
-    {
+    void applyRestOverride(const std::string &key, kilin_msgs::msg::LegCmd &leg) {
         if (!enable_rest_mask_) return;
 
         uint8_t mask = rest_mask.load(std::memory_order_relaxed);
@@ -205,8 +207,7 @@ private:
     // ============================================================
     // /cmd_vel → wheel + steering conversion
     // ============================================================
-    void cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
-    {
+    void cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg) {
         if (brake_active.load(std::memory_order_relaxed)) {
             publishBrakeCommand();
             return;
@@ -222,8 +223,22 @@ private:
 
         auto wrap_to_pi = [](double a){
             while (a >  M_PI) a -= 2.0*M_PI;
-            while (a < -M_PI) a += 2.0*M_PI;
+            while (a <= -M_PI) a += 2.0*M_PI;
             return a;
+        };
+
+        // Map any angle to [0, 2π)
+        auto mod_2pi = [](double a){
+            a = std::fmod(a, 2.0*M_PI);
+            if (a < 0) a += 2.0*M_PI;
+            return a;
+        };
+
+        // Unwrap a wrapped target ([-π,π]) to be nearest to a continuous current angle
+        auto unwrap_to_near = [&](double target_wrapped, double current_cont){
+            double curr_wrapped = wrap_to_pi(std::fmod(current_cont, 2.0*M_PI));
+            double diff = wrap_to_pi(target_wrapped - curr_wrapped);
+            return current_cont + diff;
         };
 
         const double dt = 0.01;
@@ -242,34 +257,39 @@ private:
             double Vy = vy + wz * pos.Xi;
 
             // Target steering direction in [-π, π]
-            double target_angle = std::atan2(Vy, Vx);
+            double target_raw = std::atan2(Vy, Vx);
 
-            // Previous steering angle
-            double prev = wrap_to_pi(prev_steering_angle[key]);
+            // Previous steering command (continuous, DO NOT wrap)
+            double cur = prev_steering_angle[key];
 
             // =====================================================
             // Minimal steering angle logic (for error evaluation):
             // Always move within ±90°, wheel reverses if needed.
             // =====================================================
-            double diff = wrap_to_pi(target_angle - prev);
+            double cur_wrapped = wrap_to_pi(std::fmod(cur, 2.0*M_PI));
+            double diff_wrapped = wrap_to_pi(target_raw - cur_wrapped);
 
             // If shortest rotation is > 90°, flip direction
-            if (std::fabs(diff) > M_PI_2) {
-                target_angle = wrap_to_pi(target_angle + (diff > 0 ? -M_PI : M_PI));
+            if (std::fabs(diff_wrapped) > M_PI_2) {
+                target_raw = wrap_to_pi(target_raw + (diff_wrapped > 0 ? -M_PI : M_PI));
                 // wheel reverse not needed here (error-only pass)
             }
 
             // =====================================================
+            // Unwrap to continuous target (near current)
+            // + Clamp to ±2π (prevent cable twisting)
+            // =====================================================
+            double target = unwrap_to_near(target_raw, cur);
+            target = std::clamp(target, -STEER_BOUND, +STEER_BOUND);
+
+            // =====================================================
             // Rate-limited steering command (prediction)
             // =====================================================
-            double new_angle = prev + std::clamp(
-                wrap_to_pi(target_angle - prev),
-                -max_delta, max_delta
-            );
-            new_angle = wrap_to_pi(new_angle);
+            double new_cont = cur + std::clamp(target - cur, -max_delta, +max_delta);
+            new_cont = std::clamp(new_cont, -STEER_BOUND, +STEER_BOUND);
 
-            // Remaining tracking error after rate limit
-            double err = std::fabs(wrap_to_pi(target_angle - new_angle));
+            // Remaining tracking error after rate limit (continuous)
+            double err = std::fabs(target - new_cont);
 
             // Map err -> gi in [0,1]
             double gi = 0.0;
@@ -317,38 +337,43 @@ private:
             // Target steering direction in [-π, π]
             double raw_angle = std::atan2(Vy, Vx);
 
-            // Previous steering angle
-            double prev = wrap_to_pi(prev_steering_angle[key]);
+            // Previous steering command (continuous, DO NOT wrap)
+            double cur = prev_steering_angle[key];
 
             // =====================================================
             // Minimal steering angle logic:
             // Always move within ±90°, wheel reverses if needed.
             // =====================================================
-            double diff = wrap_to_pi(raw_angle - prev);
+            double cur_wrapped = wrap_to_pi(std::fmod(cur, 2.0*M_PI));
+            double diff_wrapped = wrap_to_pi(raw_angle - cur_wrapped);
 
             // If shortest rotation is > 90°, flip direction
-            if (std::fabs(diff) > M_PI_2) {
-                raw_angle = wrap_to_pi(raw_angle + (diff > 0 ? -M_PI : M_PI));
+            if (std::fabs(diff_wrapped) > M_PI_2) {
+                raw_angle = wrap_to_pi(raw_angle + (diff_wrapped > 0 ? -M_PI : M_PI));
                 wheel_speed = -wheel_speed;
             }
 
             // =====================================================
+            // Unwrap to continuous target (near current)
+            // + Clamp to ±2π (prevent cable twisting)
+            // =====================================================
+            double target = unwrap_to_near(raw_angle, cur);
+            target = std::clamp(target, -STEER_BOUND, +STEER_BOUND);
+
+            // =====================================================
             // Steering rate-limit (dt fixed = 0.01)
             // =====================================================
-            double new_angle = prev + std::clamp(
-                wrap_to_pi(raw_angle - prev),
-                -max_delta, max_delta
-            );
+            double new_cont = cur + std::clamp(target - cur, -max_delta, +max_delta);
+            new_cont = std::clamp(new_cont, -STEER_BOUND, +STEER_BOUND);
 
-            new_angle = wrap_to_pi(new_angle);
-            prev_steering_angle[key] = new_angle;
+            // Update memory (continuous)
+            prev_steering_angle[key] = new_cont;
 
             // =====================================================
             // Convert final angle to FPGA format (0 ~ 2π)
+            //   - Use mod to avoid boundary jump issue
             // =====================================================
-            double servo_angle = new_angle;
-            if (servo_angle < 0)
-                servo_angle += 2.0 * M_PI;
+            double servo_angle = mod_2pi(new_cont);
 
             // Convert wheel speed to RPM ×10
             wheel_speed = wheel_speed / (2.0*M_PI) * 60.0 * 10.0;
@@ -441,6 +466,10 @@ private:
     double prev_g;
 
     std::map<std::string, ModulePos> modules;
+
+    // Steering memory:
+    //   - Store as continuous angle and clamp to ±2π
+    //   - Servo output is always mapped to [0, 2π)
     std::map<std::string, double> prev_steering_angle;
 
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_cmdvel;
@@ -453,8 +482,7 @@ private:
 
 KilinCmdConverter* KilinCmdConverter::instance_ = nullptr;
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
     rclcpp::spin(std::make_shared<KilinCmdConverter>());
     rclcpp::shutdown();
