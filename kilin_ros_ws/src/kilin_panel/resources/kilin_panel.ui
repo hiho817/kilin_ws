@@ -61,7 +61,7 @@
         </property>
         <property name="font">
          <font>
-          <pointsize>-1</pointsize>
+          <pointsize>11</pointsize>
           <weight>75</weight>
           <bold>true</bold>
          </font>
@@ -406,13 +406,6 @@ min-height: 20px;
       <item>
        <layout class="QHBoxLayout" name="horizontalLayout_8">
         <item>
-         <widget class="QPushButton" name="btn_trigger">
-          <property name="text">
-           <string>Trigger</string>
-          </property>
-         </widget>
-        </item>
-        <item>
          <widget class="QPushButton" name="btn_log">
           <property name="text">
            <string>Logging</string>
@@ -434,33 +427,31 @@ min-height: 20px;
      </rect>
     </property>
     <property name="title">
-     <string>Script</string>
+     <string>Other</string>
     </property>
-    <widget class="QWidget" name="verticalLayoutWidget_4">
+    <widget class="QPushButton" name="btn_trigger">
      <property name="geometry">
       <rect>
        <x>30</x>
-       <y>40</y>
-       <width>141</width>
-       <height>80</height>
+       <y>60</y>
+       <width>139</width>
+       <height>31</height>
       </rect>
      </property>
-     <layout class="QVBoxLayout" name="verticalLayout_7">
-      <item>
-       <widget class="QPushButton" name="btn_sandescape">
-        <property name="text">
-         <string>sand escape</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QPushButton" name="btn_joystick">
-        <property name="text">
-         <string>joystick</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
+     <property name="styleSheet">
+      <string notr="true">QPushButton {
+    background-color: #444444;
+    color: #BBBBBB;
+    border-radius: 8px;
+}
+
+QPushButton:pressed {
+    background-color: #333333;
+}</string>
+     </property>
+     <property name="text">
+      <string>TRIGGER OFF</string>
+     </property>
     </widget>
    </widget>
    <widget class="QGroupBox" name="groupBox_module_c">
@@ -494,19 +485,19 @@ min-height: 20px;
       <x>750</x>
       <y>380</y>
       <width>520</width>
-      <height>370</height>
+      <height>400</height>
      </rect>
     </property>
     <property name="minimumSize">
      <size>
       <width>520</width>
-      <height>370</height>
+      <height>400</height>
      </size>
     </property>
     <property name="maximumSize">
      <size>
       <width>520</width>
-      <height>370</height>
+      <height>400</height>
      </size>
     </property>
     <property name="title">

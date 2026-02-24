@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Form implementation generated from reading ui file 'kilin_panel.ui'
+# Form implementation generated from reading ui file './resources/kilin_panel.ui'
 #
 # Created by: PyQt5 UI code generator 5.15.6
 #
@@ -31,7 +31,7 @@ class Ui_MainWindow(object):
         self.btn_emergency_stop = QtWidgets.QPushButton(self.verticalLayoutWidget_2)
         self.btn_emergency_stop.setMinimumSize(QtCore.QSize(80, 30))
         font = QtGui.QFont()
-        font.setPointSize(14)
+        font.setPointSize(-1)
         font.setBold(True)
         font.setWeight(75)
         self.btn_emergency_stop.setFont(font)
@@ -191,9 +191,6 @@ class Ui_MainWindow(object):
         self.verticalLayout_8.addWidget(self.lineEdit_filename)
         self.horizontalLayout_8 = QtWidgets.QHBoxLayout()
         self.horizontalLayout_8.setObjectName("horizontalLayout_8")
-        self.btn_trigger = QtWidgets.QPushButton(self.verticalLayoutWidget_5)
-        self.btn_trigger.setObjectName("btn_trigger")
-        self.horizontalLayout_8.addWidget(self.btn_trigger)
         self.btn_log = QtWidgets.QPushButton(self.verticalLayoutWidget_5)
         self.btn_log.setObjectName("btn_log")
         self.horizontalLayout_8.addWidget(self.btn_log)
@@ -201,27 +198,27 @@ class Ui_MainWindow(object):
         self.groupBox_script = QtWidgets.QGroupBox(self.centralwidget)
         self.groupBox_script.setGeometry(QtCore.QRect(10, 600, 200, 141))
         self.groupBox_script.setObjectName("groupBox_script")
-        self.verticalLayoutWidget_4 = QtWidgets.QWidget(self.groupBox_script)
-        self.verticalLayoutWidget_4.setGeometry(QtCore.QRect(30, 40, 141, 80))
-        self.verticalLayoutWidget_4.setObjectName("verticalLayoutWidget_4")
-        self.verticalLayout_7 = QtWidgets.QVBoxLayout(self.verticalLayoutWidget_4)
-        self.verticalLayout_7.setContentsMargins(0, 0, 0, 0)
-        self.verticalLayout_7.setObjectName("verticalLayout_7")
-        self.btn_sandescape = QtWidgets.QPushButton(self.verticalLayoutWidget_4)
-        self.btn_sandescape.setObjectName("btn_sandescape")
-        self.verticalLayout_7.addWidget(self.btn_sandescape)
-        self.btn_joystick = QtWidgets.QPushButton(self.verticalLayoutWidget_4)
-        self.btn_joystick.setObjectName("btn_joystick")
-        self.verticalLayout_7.addWidget(self.btn_joystick)
+        self.btn_trigger = QtWidgets.QPushButton(self.groupBox_script)
+        self.btn_trigger.setGeometry(QtCore.QRect(30, 60, 139, 31))
+        self.btn_trigger.setStyleSheet("QPushButton {\n"
+"    background-color: #444444;\n"
+"    color: #BBBBBB;\n"
+"    border-radius: 8px;\n"
+"}\n"
+"\n"
+"QPushButton:pressed {\n"
+"    background-color: #333333;\n"
+"}")
+        self.btn_trigger.setObjectName("btn_trigger")
         self.groupBox_module_c = QtWidgets.QGroupBox(self.centralwidget)
         self.groupBox_module_c.setGeometry(QtCore.QRect(220, 380, 520, 370))
         self.groupBox_module_c.setMinimumSize(QtCore.QSize(520, 370))
         self.groupBox_module_c.setMaximumSize(QtCore.QSize(520, 370))
         self.groupBox_module_c.setObjectName("groupBox_module_c")
         self.groupBox_module_d = QtWidgets.QGroupBox(self.centralwidget)
-        self.groupBox_module_d.setGeometry(QtCore.QRect(750, 380, 520, 370))
-        self.groupBox_module_d.setMinimumSize(QtCore.QSize(520, 370))
-        self.groupBox_module_d.setMaximumSize(QtCore.QSize(520, 370))
+        self.groupBox_module_d.setGeometry(QtCore.QRect(750, 380, 520, 400))
+        self.groupBox_module_d.setMinimumSize(QtCore.QSize(520, 400))
+        self.groupBox_module_d.setMaximumSize(QtCore.QSize(520, 400))
         self.groupBox_module_d.setObjectName("groupBox_module_d")
         self.groupBox_module_a = QtWidgets.QGroupBox(self.centralwidget)
         self.groupBox_module_a.setGeometry(QtCore.QRect(220, 10, 520, 370))
@@ -264,11 +261,9 @@ class Ui_MainWindow(object):
         self.btn_brake.setText(_translate("MainWindow", "Brake"))
         self.groupBox_log.setTitle(_translate("MainWindow", "Log"))
         self.label_filename.setText(_translate("MainWindow", "FileName:"))
-        self.btn_trigger.setText(_translate("MainWindow", "Trigger"))
         self.btn_log.setText(_translate("MainWindow", "Logging"))
-        self.groupBox_script.setTitle(_translate("MainWindow", "Script"))
-        self.btn_sandescape.setText(_translate("MainWindow", "sand escape"))
-        self.btn_joystick.setText(_translate("MainWindow", "joystick"))
+        self.groupBox_script.setTitle(_translate("MainWindow", "Other"))
+        self.btn_trigger.setText(_translate("MainWindow", "TRIGGER OFF"))
         self.groupBox_module_c.setTitle(_translate("MainWindow", "Module C"))
         self.groupBox_module_d.setTitle(_translate("MainWindow", "Module D"))
         self.groupBox_module_a.setTitle(_translate("MainWindow", "Module A"))
