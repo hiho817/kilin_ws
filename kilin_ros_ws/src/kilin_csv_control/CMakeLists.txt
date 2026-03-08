@@ -9,10 +9,26 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(kilin_msgs REQUIRED)
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBGPIOD REQUIRED libgpiod)
+
 add_executable(kilin_csv_control src/kilin_csv_control.cpp)
+
 ament_target_dependencies(kilin_csv_control
   rclcpp
   kilin_msgs
+)
+
+target_include_directories(kilin_csv_control PRIVATE
+  ${LIBGPIOD_INCLUDE_DIRS}
+)
+
+target_link_libraries(kilin_csv_control
+  ${LIBGPIOD_LIBRARIES}
+)
+
+target_compile_options(kilin_csv_control PRIVATE
+  ${LIBGPIOD_CFLAGS_OTHER}
 )
 
 install(

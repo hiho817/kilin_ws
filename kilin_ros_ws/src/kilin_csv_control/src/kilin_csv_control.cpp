@@ -2,12 +2,25 @@
 #include "kilin_msgs/msg/motor_cmd_stamped.hpp"
 #include "kilin_msgs/msg/leg_cmd.hpp"
 #include "kilin_msgs/msg/motor_cmd.hpp"
+#include "kilin_msgs/msg/trigger_stamped.hpp"
 
 #include <fstream>
 #include <sstream>
 #include <vector>
 #include <string>
 #include <cmath>
+#include <atomic>
+#include <csignal>
+
+// Trigger GPIO (libgpiod)
+#include <gpiod.h>
+#include <mutex>
+
+static std::atomic_bool g_sigint_requested{false};
+
+static void sigintHandler(int) {
+    g_sigint_requested.store(true);
+}
 
 struct GaitPoint {
     double time;
@@ -25,9 +38,16 @@ public:
         this->declare_parameter<double>("rate_hz", 200.0);
         this->declare_parameter<double>("delay_start_sec", 3.0);
 
+        // Trigger GPIO params (ACTIVE-LOW: LOW=ON, HIGH=OFF)
+        this->declare_parameter<std::string>("trigger_chip", "/dev/gpiochip0");
+        this->declare_parameter<int>("trigger_line", 112);
+
         csv_path = this->get_parameter("csv_path").as_string();
         rate_hz = this->get_parameter("rate_hz").as_double();
         delay_start_sec = this->get_parameter("delay_start_sec").as_double();
+
+        trigger_chipname_ = this->get_parameter("trigger_chip").as_string();
+        trigger_line_offset_ = (unsigned int)this->get_parameter("trigger_line").as_int();
 
         if (!loadCSV(csv_path)) {
             RCLCPP_ERROR(get_logger(), "Failed to load CSV file: %s", csv_path.c_str());
@@ -37,6 +57,11 @@ public:
 
         pub_motor = this->create_publisher<kilin_msgs::msg::MotorCmdStamped>(
             "/kilin/motor_cmd_raw", 10);
+
+        auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
+        
+        pub_trigger = this->create_publisher<kilin_msgs::msg::TriggerStamped>(
+            "/kilin/trigger", qos);
 
         start_time_ = this->get_clock()->now();
 
@@ -54,7 +79,129 @@ public:
         );
     }
 
+    ~KilinGaitPlayer() override {
+        // Make sure trigger goes back to safe state even if node stops early
+        triggerOff();
+        cleanupTriggerGPIO();
+    }
+
 private:
+    void publishTriggerCommand(bool enable) {
+        if (!pub_trigger) {
+            return;
+        }
+
+        kilin_msgs::msg::TriggerStamped trigger_msg;
+        trigger_msg.enable = enable;
+        pub_trigger->publish(trigger_msg);
+    }
+
+    void publishTriggerFalseOnce(const char *reason) {
+        if (trigger_false_sent_) {
+            return;
+        }
+
+        publishTriggerCommand(false);
+        trigger_false_sent_ = true;
+        RCLCPP_INFO(get_logger(), "Published trigger=false (%s).", reason);
+    }
+
+    // ============================================================
+    // Trigger GPIO (ACTIVE-LOW)
+    // ============================================================
+    bool initTriggerGPIO() {
+        std::lock_guard<std::mutex> lk(trigger_mtx_);
+
+        if (trigger_inited_) {
+            return true;
+        }
+
+        trigger_chip_ = gpiod_chip_open(trigger_chipname_.c_str());
+        if (!trigger_chip_) {
+            RCLCPP_ERROR(get_logger(), "Failed to open %s", trigger_chipname_.c_str());
+            return false;
+        }
+
+        trigger_line_ = gpiod_chip_get_line(trigger_chip_, trigger_line_offset_);
+        if (!trigger_line_) {
+            RCLCPP_ERROR(get_logger(), "Failed to get GPIO line %u", trigger_line_offset_);
+            gpiod_chip_close(trigger_chip_);
+            trigger_chip_ = nullptr;
+            return false;
+        }
+
+        // request as output, default HIGH (safe: trigger OFF)
+        if (gpiod_line_request_output(trigger_line_, "kilin_csv_trigger", 1) < 0) {
+            RCLCPP_ERROR(get_logger(), "Failed to request GPIO line as output");
+            gpiod_chip_close(trigger_chip_);
+            trigger_chip_ = nullptr;
+            trigger_line_ = nullptr;
+            return false;
+        }
+
+        trigger_inited_ = true;
+        trigger_is_on_ = false;
+
+        RCLCPP_INFO(get_logger(),
+            "Trigger GPIO ready. ACTIVE-LOW (LOW=ON, HIGH=OFF). chip=%s line=%u",
+            trigger_chipname_.c_str(), trigger_line_offset_);
+
+        return true;
+    }
+
+    void triggerOn() {
+        if (!initTriggerGPIO()) {
+            RCLCPP_WARN(get_logger(), "Trigger ON skipped (GPIO not ready).");
+            return;
+        }
+
+        std::lock_guard<std::mutex> lk(trigger_mtx_);
+
+        if (trigger_is_on_) {
+            return;
+        }
+
+        // ACTIVE-LOW: LOW = trigger ON
+        gpiod_line_set_value(trigger_line_, 0);
+        trigger_is_on_ = true;
+        RCLCPP_INFO(get_logger(), "Trigger ON (GPIO LOW).");
+    }
+
+    void triggerOff() {
+        std::lock_guard<std::mutex> lk(trigger_mtx_);
+
+        if (!trigger_inited_) {
+            return;
+        }
+        if (!trigger_is_on_) {
+            return;
+        }
+
+        // ACTIVE-LOW: HIGH = trigger OFF (safe)
+        gpiod_line_set_value(trigger_line_, 1);
+        trigger_is_on_ = false;
+        RCLCPP_INFO(get_logger(), "Trigger OFF (GPIO HIGH).");
+    }
+
+    void cleanupTriggerGPIO() {
+        std::lock_guard<std::mutex> lk(trigger_mtx_);
+
+        if (trigger_line_) {
+            // safe state
+            gpiod_line_set_value(trigger_line_, 1);
+            gpiod_line_release(trigger_line_);
+            trigger_line_ = nullptr;
+        }
+
+        if (trigger_chip_) {
+            gpiod_chip_close(trigger_chip_);
+            trigger_chip_ = nullptr;
+        }
+
+        trigger_inited_ = false;
+        trigger_is_on_ = false;
+    }
+
     // ============================================================
     // CSV Loader
     // ============================================================
@@ -128,14 +275,22 @@ private:
     // ============================================================
     void update() {
         rclcpp::Time now = this->get_clock()->now();
-        
+
+        if (g_sigint_requested.load()) {
+            RCLCPP_WARN(get_logger(), "SIGINT received. Sending trigger=false then shutting down.");
+            triggerOff();
+            publishTriggerFalseOnce("SIGINT");
+            rclcpp::shutdown();
+            return;
+        }
+
         // Check whether time is valid (in use_sim_time mode, /clock may not be published yet)
         if (now.seconds() == 0.0) {
             RCLCPP_WARN_THROTTLE(get_logger(), *this->get_clock(), 2000,
                 "Waiting for valid clock... (Is /clock being published?)");
             return;
         }
-        
+
         double elapsed = (now - start_time_).seconds();
 
         // --------------------------
@@ -149,6 +304,10 @@ private:
             RCLCPP_INFO(get_logger(), "CSV playback started.");
             playback_start_time = now;
             started = true;
+
+            // Trigger ON right when playback starts (keep ON until finished)
+            triggerOn();
+            publishTriggerCommand(true);
         }
 
         double t = (now - playback_start_time).seconds();
@@ -157,6 +316,10 @@ private:
         // Check if finished
         // --------------------------
         if (t > gait.back().time) {
+            // Turn trigger OFF only after finishing the last point
+            triggerOff();
+            publishTriggerFalseOnce("playback complete");
+
             RCLCPP_INFO(get_logger(), "CSV playback finished. Shutting down.");
             rclcpp::shutdown();
             return;
@@ -182,22 +345,22 @@ private:
 
         msg.module_a = buildLegCmd(t, p0, p1,
                                    p0.a_hip_pos, p1.a_hip_pos,
-                                   p0.a_hub_vel, p1.a_hub_vel,
+                                   p0.a_hub_vel,
                                    p0.a_hub_mode);
 
         msg.module_b = buildLegCmd(t, p0, p1,
                                    p0.b_hip_pos, p1.b_hip_pos,
-                                   p0.b_hub_vel, p1.b_hub_vel,
+                                   p0.b_hub_vel,
                                    p0.b_hub_mode);
 
         msg.module_c = buildLegCmd(t, p0, p1,
                                    p0.c_hip_pos, p1.c_hip_pos,
-                                   p0.c_hub_vel, p1.c_hub_vel,
+                                   p0.c_hub_vel,
                                    p0.c_hub_mode);
 
         msg.module_d = buildLegCmd(t, p0, p1,
                                    p0.d_hip_pos, p1.d_hip_pos,
-                                   p0.d_hub_vel, p1.d_hub_vel,
+                                   p0.d_hub_vel,
                                    p0.d_hub_mode);
 
         pub_motor->publish(msg);
@@ -257,6 +420,7 @@ private:
     std::vector<GaitPoint> gait;
 
     rclcpp::Publisher<kilin_msgs::msg::MotorCmdStamped>::SharedPtr pub_motor;
+    rclcpp::Publisher<kilin_msgs::msg::TriggerStamped>::SharedPtr pub_trigger;
     rclcpp::TimerBase::SharedPtr timer;
 
     std::string csv_path;
@@ -267,10 +431,23 @@ private:
     rclcpp::Time start_time_;
     rclcpp::Time playback_start_time;
     bool started = false;
+
+    // Trigger GPIO members
+    std::string trigger_chipname_;
+    unsigned int trigger_line_offset_ = 112;
+
+    gpiod_chip* trigger_chip_ = nullptr;
+    gpiod_line* trigger_line_ = nullptr;
+
+    std::mutex trigger_mtx_;
+    bool trigger_inited_ = false;
+    bool trigger_is_on_ = false;
+    bool trigger_false_sent_ = false;
 };
 
 int main(int argc, char **argv) {
-    rclcpp::init(argc, argv);
+    std::signal(SIGINT, sigintHandler);
+    rclcpp::init(argc, argv, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
     rclcpp::spin(std::make_shared<KilinGaitPlayer>());
     rclcpp::shutdown();
     return 0;

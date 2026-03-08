@@ -1,3 +1,7 @@
 [submodule "grpc_core"]
 	path = grpc_core
 	url = git@github.com:hiho817/grpc_core.git
+
+[submodule "kilin_ros_ws/src/kilin_imu/src/mip_sdk"]
+	path = kilin_ros_ws/src/kilin_imu/src/mip_sdk
+	url = https://github.com/hiho817/mip_sdk.git

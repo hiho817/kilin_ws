@@ -15,6 +15,9 @@ def generate_launch_description():
     flush_every_n = LaunchConfiguration("flush_every_n")
     qos_depth = LaunchConfiguration("qos_depth")
 
+    trigger_topic = LaunchConfiguration("trigger_topic")
+    shutdown_delay_sec = LaunchConfiguration("shutdown_delay_sec")
+
     return LaunchDescription([
         # ----------------------------
         # File naming / path
@@ -47,6 +50,11 @@ def generate_launch_description():
             default_value="/power/state",
             description="Power state topic."
         ),
+        DeclareLaunchArgument(
+            "trigger_topic",
+            default_value="/kilin/trigger",
+            description="Trigger topic for gating logging (enable=true start, enable=false stop)."
+        ),
 
         # ----------------------------
         # Behavior
@@ -60,6 +68,11 @@ def generate_launch_description():
             "qos_depth",
             default_value="50",
             description="QoS depth for subscriptions."
+        ),
+        DeclareLaunchArgument(
+            "shutdown_delay_sec",
+            default_value="3.0",
+            description="Delay seconds before shutdown after trigger enable=false."
         ),
 
         # ============================================================
@@ -82,8 +95,10 @@ def generate_launch_description():
                 "daily_folder": True,
                 "add_suffix_if_exists": True,
 
-                # direct mode
-                "use_trigger": False,
+                # trigger mode
+                "use_trigger": True,
+                "trigger_topic": trigger_topic,
+                "shutdown_delay_sec": shutdown_delay_sec,
             }],
         ),
     ])

@@ -12,7 +12,8 @@ setup(
         'module_panel',
         'module_widget',
         'motor_node',
-        'power_node'
+        'power_node',
+        'trigger_node'
     ],
     package_dir={'': 'src'},
     data_files=[

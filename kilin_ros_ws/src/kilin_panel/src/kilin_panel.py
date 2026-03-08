@@ -3,6 +3,8 @@ from mainwindow import Ui_MainWindow
 from module_widget import ModulePanel
 from power_node import PowerNode, PowerStateUpdateEvent
 from motor_node import MotorNode, MotorStateUpdateEvent
+from trigger_node import TriggerNode, TriggerStateUpdateEvent
+
 from kilin_msgs.msg import MotorCmdStamped
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
@@ -30,10 +32,12 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         rclpy.init(args=None)
         self.power_node = PowerNode(ui_ref=self)
         self.motor_node = MotorNode(ui_ref=self)
+        self.trigger_node = TriggerNode(ui_ref=self, topic="/kilin/trigger")
 
         self.executor = MultiThreadedExecutor()
         self.executor.add_node(self.power_node)
         self.executor.add_node(self.motor_node)
+        self.executor.add_node(self.trigger_node)
         self.executor_thread = Thread(target=self.executor.spin, daemon=True)
         self.executor_thread.start()
 
@@ -93,7 +97,16 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         self.btn_setzero.clicked.connect(lambda: self.set_all_motor_mode("Set Zero"))
         self.btn_brake.clicked.connect(self.apply_brake_preset)
 
+        # Trigger indicator button (UI-only indicator)
+        # NOTE: If you want this to be non-clickable, uncomment next line.
+        # self.btn_trigger.setEnabled(False)
+
         self.update_button_states()
+
+        # -------------------------------------------------------------
+        # Trigger indicator default state (UI)
+        # -------------------------------------------------------------
+        self.set_trigger_button(False)
 
         # -------------------------------------------------------------
         # Motor safety states
@@ -214,6 +227,30 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
                         widget.setReadOnly(not enabled)
                         color = "#ffffff" if enabled else "#e0e0e0"
                         widget.setStyleSheet(f"background-color: {color};")
+
+    # -------------------------------------------------------------
+    # Trigger UI indicator
+    # -------------------------------------------------------------
+    def set_trigger_button(self, enabled: bool):
+        """
+        Update trigger indicator button:
+        - Default (disabled): revert to Qt Designer style (dark)
+        - Enabled: green
+        """
+        if enabled:
+            self.btn_trigger.setStyleSheet(
+                "QPushButton {"
+                "background-color: #00C853;"
+                "color: white;"
+                "border-radius: 8px;"
+                "font-weight: bold;"
+                "}"
+            )
+            self.btn_trigger.setText("TRIGGER ON")
+        else:
+            # Clear runtime stylesheet -> fallback to Qt Designer style
+            self.btn_trigger.setStyleSheet("")
+            self.btn_trigger.setText("TRIGGER OFF")
 
     # -------------------------------------------------------------
     # Insert module widget
@@ -375,12 +412,10 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
                     hub_mode.setCurrentIndex(idx)
             hub_tor_cmd = getattr(module, "lineEdit_hub_tor_cmd", None)
             if hub_tor_cmd:
-                hub_tor_cmd.setText(f"{self.BRAKE_TORQUE:.1f}") 
+                hub_tor_cmd.setText(f"{self.BRAKE_TORQUE:.1f}")
 
         self.handle_send()
         self.node_ui.get_logger().info("[UI] Brake preset applied: hub=Brake, steering=Position@0deg, hip=Rest")
-
-
 
     # -------------------------------------------------------------
     # Motor error safety handler
@@ -440,7 +475,7 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
                     hub_mode.setCurrentIndex(idx)
             hub_tor_cmd = getattr(module, "lineEdit_hub_tor_cmd", None)
             if hub_tor_cmd:
-                hub_tor_cmd.setText(f"{self.BRAKE_TORQUE:.1f}") 
+                hub_tor_cmd.setText(f"{self.BRAKE_TORQUE:.1f}")
 
         # 3. Publish the Brake preset command once
         self.handle_send()
@@ -449,7 +484,6 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
             "[SAFETY] Brake preset applied due to persistent motor error "
             "(hip=Rest, steering=Position@0deg, hub=Brake)."
         )
-
 
     # -------------------------------------------------------------
     # Qt custom events (Power and Motor updates)
@@ -525,6 +559,10 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
             # Voltage display (use v_0)
             self.text_voltage_display.setText(f"{event.power_state['voltages'][0]:.5f} V")
 
+        elif isinstance(event, TriggerStateUpdateEvent):
+            # Trigger enable indicator
+            self.set_trigger_button(event.enabled)
+
     # -------------------------------------------------------------
     # Cleanup handling (GUI close / Ctrl+C / crash)
     # -------------------------------------------------------------
@@ -546,6 +584,7 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
         try:
             self.power_node.destroy_node()
             self.motor_node.destroy_node()
+            self.trigger_node.destroy_node()
             self.node_ui.destroy_node()
         except Exception as e:
             print(f"[Panel] Node destroy error: {e}")

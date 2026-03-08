@@ -11,6 +11,9 @@
   <depend>rclcpp</depend>
   <depend>kilin_msgs</depend>
 
+  <build_depend>libgpiod-dev</build_depend>
+  <exec_depend>libgpiod2</exec_depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>

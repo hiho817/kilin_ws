@@ -30,7 +30,7 @@ public:
 
         // Steering speed limit (rad/s)
         steering_rate_limit =
-            declare_parameter<double>("steering_rate_limit", 1000.0);
+            declare_parameter<double>("steering_rate_limit", 2.0);
 
         // Debug switch: module rest mask
         enable_rest_mask_ =
