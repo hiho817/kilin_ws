@@ -46,8 +46,8 @@ using namespace mip;
 #define DO_PRINT true // set to false to stop printing to console
 #define DO_LOG true // set to false to stop logging
 #define PRINTING_PERIOD 1000 // in ms
-#define LOGGING_PERIOD 10 // in ms
-#define SENSOR_SAMPLE_RATE 100 // in Hz
+#define LOGGING_PERIOD 5 // in ms
+#define SENSOR_SAMPLE_RATE 200 // in Hz
 
 ////////////////////////////////////////////////////////////////////////////////
 // Global Variables
@@ -171,8 +171,12 @@ int main(int argc, const char* argv[])
     //Note: Querying the device base rate is only one way to calculate the descriptor decimation.
     //We could have also set it directly with information from the datasheet.
 
+    auto logger = rclcpp::get_logger("imu_logger");
+
     if(commands_3dm::imuGetBaseRate(*device, &sensor_base_rate) != CmdResult::ACK_OK)
          exit_gracefully("ERROR: Could not get sensor base rate format!");
+
+    RCLCPP_INFO(logger, "Sensor Base Rate: %d Hz", sensor_base_rate);
 
     const uint16_t sensor_sample_rate = SENSOR_SAMPLE_RATE; // Hz
     const uint16_t sensor_decimation = sensor_base_rate / sensor_sample_rate;
@@ -196,7 +200,9 @@ int main(int argc, const char* argv[])
     if(commands_3dm::filterGetBaseRate(*device, &filter_base_rate) != CmdResult::ACK_OK)
          exit_gracefully("ERROR: Could not get filter base rate format!");
 
-    const uint16_t filter_sample_rate = 100; // Hz
+    RCLCPP_INFO(logger, "Filter Base Rate: %d Hz", filter_base_rate);
+
+    const uint16_t filter_sample_rate = 200; // Hz    
     const uint16_t filter_decimation = filter_base_rate / filter_sample_rate;
 
     std::array<DescriptorRate, 5> filter_descriptors = {{

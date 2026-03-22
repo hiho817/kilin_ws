@@ -25,10 +25,10 @@ static void sigintHandler(int) {
 struct GaitPoint {
     double time;
 
-    double a_hip_pos, a_hub_vel, a_hub_mode;
-    double b_hip_pos, b_hub_vel, b_hub_mode;
-    double c_hip_pos, c_hub_vel, c_hub_mode;
-    double d_hip_pos, d_hub_vel, d_hub_mode;
+    double a_hip_pos, a_steer_pos, a_hub_vel, a_hub_mode;
+    double b_hip_pos, b_steer_pos, b_hub_vel, b_hub_mode;
+    double c_hip_pos, c_steer_pos, c_hub_vel, c_hub_mode;
+    double d_hip_pos, d_steer_pos, d_hub_vel, d_hub_mode;
 };
 
 class KilinGaitPlayer : public rclcpp::Node {
@@ -168,17 +168,9 @@ private:
     }
 
     void triggerOff() {
+        if (!trigger_inited_) return;
         std::lock_guard<std::mutex> lk(trigger_mtx_);
-
-        if (!trigger_inited_) {
-            return;
-        }
-        if (!trigger_is_on_) {
-            return;
-        }
-
-        // ACTIVE-LOW: HIGH = trigger OFF (safe)
-        gpiod_line_set_value(trigger_line_, 1);
+        gpiod_line_set_value(trigger_line_, 1); // HIGH = OFF
         trigger_is_on_ = false;
         RCLCPP_INFO(get_logger(), "Trigger OFF (GPIO HIGH).");
     }
@@ -192,12 +184,10 @@ private:
             gpiod_line_release(trigger_line_);
             trigger_line_ = nullptr;
         }
-
         if (trigger_chip_) {
             gpiod_chip_close(trigger_chip_);
             trigger_chip_ = nullptr;
         }
-
         trigger_inited_ = false;
         trigger_is_on_ = false;
     }
@@ -214,6 +204,7 @@ private:
         std::string line;
         getline(file, line); // header
 
+        bool csv_has_steer = false;
         while (getline(file, line)) {
             std::stringstream ss(line);
             std::string cell;
@@ -223,37 +214,48 @@ private:
                 nums.push_back(std::stod(cell));
             }
 
-            if (nums.size() != 13) {
+            if (nums.size() != 13 && nums.size() != 17) {
                 RCLCPP_ERROR(get_logger(),
-                    "CSV row has %zu columns; expected 13!", nums.size());
+                    "CSV row has %zu columns; expected 13 (no steering) or 17 (with steering)!", nums.size());
                 return false;
             }
 
             int k = 0;
             GaitPoint p;
+            bool has_steer = (nums.size() == 17);
+            csv_has_steer = has_steer;
 
             p.time = nums[k++];
 
+            // Module A
             p.a_hip_pos = nums[k++];
+            if (has_steer) p.a_steer_pos = nums[k++]; else p.a_steer_pos = 0.0;
             p.a_hub_vel = nums[k++];
             p.a_hub_mode = nums[k++];
 
+            // Module B
             p.b_hip_pos = nums[k++];
+            if (has_steer) p.b_steer_pos = nums[k++]; else p.b_steer_pos = 0.0;
             p.b_hub_vel = nums[k++];
             p.b_hub_mode = nums[k++];
 
+            // Module C
             p.c_hip_pos = nums[k++];
+            if (has_steer) p.c_steer_pos = nums[k++]; else p.c_steer_pos = 0.0;
             p.c_hub_vel = nums[k++];
             p.c_hub_mode = nums[k++];
 
+            // Module D
             p.d_hip_pos = nums[k++];
+            if (has_steer) p.d_steer_pos = nums[k++]; else p.d_steer_pos = 0.0;
             p.d_hub_vel = nums[k++];
             p.d_hub_mode = nums[k++];
 
             gait.push_back(p);
         }
 
-        RCLCPP_INFO(get_logger(), "Loaded %zu gait points from CSV.", gait.size());
+        size_t cols = gait.empty() ? 0 : (csv_has_steer ? 17 : 13);
+        RCLCPP_INFO(get_logger(), "Loaded %zu gait points from CSV. (Columns: %zu)", gait.size(), cols);
         return true;
     }
 
@@ -345,21 +347,25 @@ private:
 
         msg.module_a = buildLegCmd(t, p0, p1,
                                    p0.a_hip_pos, p1.a_hip_pos,
+                                   p0.a_steer_pos, p1.a_steer_pos,
                                    p0.a_hub_vel,
                                    p0.a_hub_mode);
 
         msg.module_b = buildLegCmd(t, p0, p1,
                                    p0.b_hip_pos, p1.b_hip_pos,
+                                   p0.b_steer_pos, p1.b_steer_pos,
                                    p0.b_hub_vel,
                                    p0.b_hub_mode);
 
         msg.module_c = buildLegCmd(t, p0, p1,
                                    p0.c_hip_pos, p1.c_hip_pos,
+                                   p0.c_steer_pos, p1.c_steer_pos,
                                    p0.c_hub_vel,
                                    p0.c_hub_mode);
 
         msg.module_d = buildLegCmd(t, p0, p1,
                                    p0.d_hip_pos, p1.d_hip_pos,
+                                   p0.d_steer_pos, p1.d_steer_pos,
                                    p0.d_hub_vel,
                                    p0.d_hub_mode);
 
@@ -373,6 +379,7 @@ private:
         double t,
         const GaitPoint &p0, const GaitPoint &p1,
         double hip0, double hip1,
+        double steer0, double steer1,
         double hub_v0,
         double hub_mode0,
         bool is_flip = false
@@ -391,8 +398,10 @@ private:
         leg.hip.ki = 0.0;
         leg.hip.kd = 5.0;
 
-        // Steering fixed
-        leg.steering.position = 0.0;
+        // Steering interpolation
+        double steer_deg = lerp(t, p0.time, p1.time, steer0, steer1);
+        double steer_rad = steer_deg * M_PI / 180.0;
+        leg.steering.position = steer_rad;
         leg.steering.motor_mode = 4;
 
         // Hub ZOH
@@ -446,9 +455,10 @@ private:
 };
 
 int main(int argc, char **argv) {
+    rclcpp::init(argc, argv);
     std::signal(SIGINT, sigintHandler);
-    rclcpp::init(argc, argv, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
-    rclcpp::spin(std::make_shared<KilinGaitPlayer>());
+    auto node = std::make_shared<KilinGaitPlayer>();
+    rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;
 }
