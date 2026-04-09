@@ -348,26 +348,26 @@ private:
         msg.module_a = buildLegCmd(t, p0, p1,
                                    p0.a_hip_pos, p1.a_hip_pos,
                                    p0.a_steer_pos, p1.a_steer_pos,
-                                   p0.a_hub_vel,
-                                   p0.a_hub_mode);
+                                   p1.a_hub_vel,
+                                   p1.a_hub_mode);
 
         msg.module_b = buildLegCmd(t, p0, p1,
                                    p0.b_hip_pos, p1.b_hip_pos,
                                    p0.b_steer_pos, p1.b_steer_pos,
-                                   p0.b_hub_vel,
-                                   p0.b_hub_mode);
+                                   p1.b_hub_vel,
+                                   p1.b_hub_mode);
 
         msg.module_c = buildLegCmd(t, p0, p1,
                                    p0.c_hip_pos, p1.c_hip_pos,
                                    p0.c_steer_pos, p1.c_steer_pos,
-                                   p0.c_hub_vel,
-                                   p0.c_hub_mode);
+                                   p1.c_hub_vel,
+                                   p1.c_hub_mode);
 
         msg.module_d = buildLegCmd(t, p0, p1,
                                    p0.d_hip_pos, p1.d_hip_pos,
                                    p0.d_steer_pos, p1.d_steer_pos,
-                                   p0.d_hub_vel,
-                                   p0.d_hub_mode);
+                                   p1.d_hub_vel,
+                                   p1.d_hub_mode);
 
         pub_motor->publish(msg);
     }
@@ -380,8 +380,8 @@ private:
         const GaitPoint &p0, const GaitPoint &p1,
         double hip0, double hip1,
         double steer0, double steer1,
-        double hub_v0,
-        double hub_mode0,
+        double hub_v1,
+        double hub_mode1,
         bool is_flip = false
     ) {
         kilin_msgs::msg::LegCmd leg;
@@ -405,8 +405,8 @@ private:
         leg.steering.motor_mode = 4;
 
         // Hub ZOH
-        leg.hub.velocity = zoh(hub_v0);
-        leg.hub.motor_mode = (int)hub_mode0;
+        leg.hub.velocity = zoh(hub_v1);
+        leg.hub.motor_mode = (int)hub_mode1;
 
         return leg;
     }
