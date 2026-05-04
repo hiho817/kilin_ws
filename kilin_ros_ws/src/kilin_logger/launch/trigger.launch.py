@@ -10,10 +10,12 @@ def generate_launch_description():
     # ============================================================
     csv_name = LaunchConfiguration("csv_name")
     log_dir = LaunchConfiguration("log_dir")
+    motor_cmd_topic = LaunchConfiguration("motor_cmd_topic")
     motor_topic = LaunchConfiguration("motor_topic")
     power_topic = LaunchConfiguration("power_topic")
     flush_every_n = LaunchConfiguration("flush_every_n")
     qos_depth = LaunchConfiguration("qos_depth")
+    cmd_buffer_size = LaunchConfiguration("cmd_buffer_size")
 
     trigger_topic = LaunchConfiguration("trigger_topic")
     shutdown_delay_sec = LaunchConfiguration("shutdown_delay_sec")
@@ -40,6 +42,11 @@ def generate_launch_description():
         # ----------------------------
         # Topics
         # ----------------------------
+        DeclareLaunchArgument(
+            "motor_cmd_topic",
+            default_value="/motor/command",
+            description="Motor command topic."
+        ),
         DeclareLaunchArgument(
             "motor_topic",
             default_value="/motor/state",
@@ -70,6 +77,11 @@ def generate_launch_description():
             description="QoS depth for subscriptions."
         ),
         DeclareLaunchArgument(
+            "cmd_buffer_size",
+            default_value="200",
+            description="Maximum buffered motor commands for FIFO alignment."
+        ),
+        DeclareLaunchArgument(
             "shutdown_delay_sec",
             default_value="3.0",
             description="Delay seconds before shutdown after trigger enable=false."
@@ -86,10 +98,12 @@ def generate_launch_description():
             parameters=[{
                 "csv_name": csv_name,
                 "log_dir": log_dir,
+                "motor_cmd_topic": motor_cmd_topic,
                 "motor_topic": motor_topic,
                 "power_topic": power_topic,
                 "flush_every_n": flush_every_n,
                 "qos_depth": qos_depth,
+                "cmd_buffer_size": cmd_buffer_size,
 
                 # fixed behavior
                 "daily_folder": True,
