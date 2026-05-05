@@ -50,7 +50,7 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 {"csv_path": csv_full_path},
-                {"rate_hz": 200.0},
+                {"rate_hz": 100.0},
                 {"use_sim_time": use_sim_time}  # Pass use_sim_time to the Node
             ]
         )

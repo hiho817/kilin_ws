@@ -34,10 +34,11 @@ public:
         // trigger control
         // - use_trigger=false: start logging immediately (original behavior)
         // - use_trigger=true : wait for /kilin/trigger enable=true to start logging
-        //                      and enable=false to stop logging (then shutdown after 3 sec)
+        //                      and enable=false to stop logging after stop_grace_sec
         this->declare_parameter<bool>("use_trigger", false);
         this->declare_parameter<std::string>("trigger_topic", "/kilin/trigger");
         this->declare_parameter<double>("shutdown_delay_sec", 3.0);
+        this->declare_parameter<double>("stop_grace_sec", 0.5);
 
         // logging path / naming
         // - log_dir: if empty => auto resolve to <kilin_ws>/logs
@@ -64,6 +65,7 @@ public:
         use_trigger_        = this->get_parameter("use_trigger").as_bool();
         trigger_topic_      = this->get_parameter("trigger_topic").as_string();
         shutdown_delay_sec_ = this->get_parameter("shutdown_delay_sec").as_double();
+        stop_grace_sec_     = this->get_parameter("stop_grace_sec").as_double();
 
         log_dir              = this->get_parameter("log_dir").as_string();
         csv_name             = this->get_parameter("csv_name").as_string();
@@ -176,8 +178,8 @@ public:
 
         RCLCPP_INFO(
             get_logger(),
-            "kilin_logger started. pair_timeout_sec=%.3f cmd_buffer_size=%d",
-            pair_timeout_sec_, cmd_buffer_size_);
+            "kilin_logger started. pair_timeout_sec=%.3f cmd_buffer_size=%d stop_grace_sec=%.3f",
+            pair_timeout_sec_, cmd_buffer_size_, stop_grace_sec_);
     }
 
     ~KilinLogger() override {
@@ -285,6 +287,15 @@ private:
 
         if (msg->enable) {
             // START logging
+            if (stopping_) {
+                stopping_ = false;
+                if (stop_timer_) {
+                    stop_timer_->cancel();
+                }
+
+                RCLCPP_INFO(get_logger(), "Trigger enable=true -> CANCEL stop grace period");
+            }
+
             if (!logging_enabled_) {
                 logging_enabled_ = true;
 
@@ -297,17 +308,48 @@ private:
             }
         } else {
             // STOP logging
-            if (logging_enabled_) {
-                logging_enabled_ = false;
-                RCLCPP_INFO(get_logger(), "Trigger enable=false -> STOP logging (close file, shutdown in %.1f sec)", shutdown_delay_sec_);
+            if (logging_enabled_ && !stopping_) {
+                stopping_ = true;
 
-                // close file immediately (stop writing)
+                RCLCPP_INFO(
+                    get_logger(),
+                    "Trigger enable=false -> KEEP logging for %.3f sec, then close file and shutdown in %.1f sec",
+                    stop_grace_sec_, shutdown_delay_sec_);
+
+                // Do not close file immediately.
+                // Keep logging for stop_grace_sec_ to collect late motor/state from sbRIO.
+                scheduleStop_(stop_grace_sec_);
+            }
+        }
+    }
+
+    void scheduleStop_(double delay_sec) {
+        auto delay_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::duration<double>(delay_sec));
+
+        stop_timer_ = this->create_wall_timer(
+            delay_ns,
+            [this]() {
+                if (closed) return;
+
+                if (stop_timer_) {
+                    stop_timer_->cancel();
+                }
+
+                RCLCPP_INFO(this->get_logger(), "Stop grace period done -> flush pending rows and close file");
+
+                // Flush pending motor rows before closing.
+                flushAllPending_();
+
+                logging_enabled_ = false;
+                stopping_ = false;
+
                 closeFile_();
 
                 // shutdown after delay
                 scheduleShutdown_(shutdown_delay_sec_);
             }
-        }
+        );
     }
 
     void scheduleShutdown_(double delay_sec) {
@@ -491,6 +533,50 @@ private:
         trimCommandBuffer_();
     }
 
+    // ============================================================
+    // Flush all remaining pending rows before close
+    // ============================================================
+    void flushAllPending_() {
+        // ----------------------------
+        // 1) flush currently paired rows first
+        // ----------------------------
+        std::vector<uint32_t> paired_seqs;
+        paired_seqs.reserve(motor_pending_.size());
+
+        for (const auto &kv : motor_pending_) {
+            const uint32_t seq = kv.first;
+            if (power_pending_.find(seq) != power_pending_.end()) {
+                paired_seqs.push_back(seq);
+            }
+        }
+
+        for (const auto seq : paired_seqs) {
+            auto itM = motor_pending_.find(seq);
+            auto itP = power_pending_.find(seq);
+
+            if (itM != motor_pending_.end() && itP != power_pending_.end()) {
+                writeRow_(itM->second.msg, /*has_power=*/true, &itP->second);
+                motor_pending_.erase(itM);
+                power_pending_.erase(itP);
+            }
+        }
+
+        // ----------------------------
+        // 2) flush remaining motor-only rows
+        // ----------------------------
+        for (auto &kv : motor_pending_) {
+            writeRow_(kv.second.msg, /*has_power=*/false, nullptr);
+        }
+        motor_pending_.clear();
+
+        // ----------------------------
+        // 3) drop power-only rows
+        // ----------------------------
+        power_pending_.clear();
+
+        try { file.flush(); } catch (...) {}
+    }
+
     void trimCommandBuffer_() {
         if (cmd_buffer_size_ <= 0) {
             cmd_pending_.clear();
@@ -630,14 +716,17 @@ private:
     bool use_trigger_ = false;
     std::string trigger_topic_;
     double shutdown_delay_sec_ = 3.0;
+    double stop_grace_sec_ = 0.5;
+
+    std::atomic<bool> logging_enabled_{false};
+    bool stopping_ = false;
+    bool shutdown_scheduled_ = false;
+    rclcpp::TimerBase::SharedPtr stop_timer_;
+    rclcpp::TimerBase::SharedPtr shutdown_timer_;
 
     // seq-join policy
     double pair_timeout_sec_ = 0.5;
     int cmd_buffer_size_ = 200;
-
-    std::atomic<bool> logging_enabled_{false};
-    bool shutdown_scheduled_ = false;
-    rclcpp::TimerBase::SharedPtr shutdown_timer_;
 
     // log settings
     std::string log_dir;

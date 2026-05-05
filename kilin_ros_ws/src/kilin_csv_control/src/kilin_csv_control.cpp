@@ -35,7 +35,7 @@ class KilinGaitPlayer : public rclcpp::Node {
 public:
     KilinGaitPlayer() : Node("kilin_csv_control") {
         this->declare_parameter<std::string>("csv_path", "gait.csv");
-        this->declare_parameter<double>("rate_hz", 200.0);
+        this->declare_parameter<double>("rate_hz", 100.0);
         this->declare_parameter<double>("delay_start_sec", 3.0);
 
         // Trigger GPIO params (ACTIVE-LOW: LOW=ON, HIGH=OFF)
