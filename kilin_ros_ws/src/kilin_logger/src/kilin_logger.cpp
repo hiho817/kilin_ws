@@ -1,5 +1,5 @@
 #include "rclcpp/rclcpp.hpp"
-#include "kilin_msgs/msg/motor_cmd_stamped.hpp"
+// #include "kilin_msgs/msg/motor_cmd_stamped.hpp"
 #include "kilin_msgs/msg/motor_state_stamped.hpp"
 #include "kilin_msgs/msg/power_state_stamped.hpp"
 #include "kilin_msgs/msg/trigger_stamped.hpp"
@@ -25,7 +25,7 @@ public:
         // ============================================================
         // Parameters
         // ============================================================
-        this->declare_parameter<std::string>("motor_cmd_topic", "/motor/command");
+        // this->declare_parameter<std::string>("motor_cmd_topic", "/motor/command");
         this->declare_parameter<std::string>("motor_topic", "/motor/state");
         this->declare_parameter<std::string>("power_topic", "/power/state");
         this->declare_parameter<int>("flush_every_n", 20);      // 0: flush every row
@@ -54,9 +54,9 @@ public:
         // - pair_timeout_sec: wait up to this long for matching power(seq) after motor(seq) arrives
         //   if timeout, log motor only (leave power columns empty)
         this->declare_parameter<double>("pair_timeout_sec", 0.5);
-        this->declare_parameter<int>("cmd_buffer_size", 200);
+        // this->declare_parameter<int>("cmd_buffer_size", 200);
 
-        motor_cmd_topic = this->get_parameter("motor_cmd_topic").as_string();
+        // motor_cmd_topic = this->get_parameter("motor_cmd_topic").as_string();
         motor_topic   = this->get_parameter("motor_topic").as_string();
         power_topic   = this->get_parameter("power_topic").as_string();
         flush_every_n = this->get_parameter("flush_every_n").as_int();
@@ -73,7 +73,7 @@ public:
         add_suffix_if_exists = this->get_parameter("add_suffix_if_exists").as_bool();
 
         pair_timeout_sec_ = this->get_parameter("pair_timeout_sec").as_double();
-        cmd_buffer_size_ = this->get_parameter("cmd_buffer_size").as_int();
+        // cmd_buffer_size_ = this->get_parameter("cmd_buffer_size").as_int();
 
         // ============================================================
         // Resolve log directory (KILIN_ws/logs)
@@ -151,8 +151,10 @@ public:
         // ============================================================
         // Subscribers
         // ============================================================
-        sub_motor_cmd = this->create_subscription<kilin_msgs::msg::MotorCmdStamped>(
-            motor_cmd_topic, qos, std::bind(&KilinLogger::onMotorCmd_, this, std::placeholders::_1));
+        // Motor command logging is currently disabled, so keep the original
+        // subscription code commented out instead of deleting it.
+        // sub_motor_cmd = this->create_subscription<kilin_msgs::msg::MotorCmdStamped>(
+        //     motor_cmd_topic, qos, std::bind(&KilinLogger::onMotorCmd_, this, std::placeholders::_1));
 
         sub_motor = this->create_subscription<kilin_msgs::msg::MotorStateStamped>(
             motor_topic, qos, std::bind(&KilinLogger::onMotorState_, this, std::placeholders::_1));
@@ -179,7 +181,7 @@ public:
         RCLCPP_INFO(
             get_logger(),
             "kilin_logger started. pair_timeout_sec=%.3f cmd_buffer_size=%d stop_grace_sec=%.3f",
-            pair_timeout_sec_, cmd_buffer_size_, stop_grace_sec_);
+            pair_timeout_sec_, 0, stop_grace_sec_);
     }
 
     ~KilinLogger() override {
@@ -195,10 +197,10 @@ private:
         std::chrono::steady_clock::time_point t_arrival;
     };
 
-    struct PendingCmd {
-        kilin_msgs::msg::MotorCmdStamped msg;
-        double tsec = 0.0;
-    };
+    // struct PendingCmd {
+    //     kilin_msgs::msg::MotorCmdStamped msg;
+    //     double tsec = 0.0;
+    // };
 
     struct PendingPower {
         uint32_t seq = 0;
@@ -269,7 +271,7 @@ private:
         closed = true;
 
         // Clear pending buffers (avoid any future writes)
-        cmd_pending_.clear();
+        // cmd_pending_.clear();
         motor_pending_.clear();
         power_pending_.clear();
 
@@ -300,7 +302,7 @@ private:
                 logging_enabled_ = true;
 
                 // Clear buffers when (re)starting to avoid mixing old pending data
-                cmd_pending_.clear();
+                // cmd_pending_.clear();
                 motor_pending_.clear();
                 power_pending_.clear();
 
@@ -396,34 +398,23 @@ private:
         // power meta
         file << ",power_seq,power_time_sec,power_age_sec";
 
-        // command fields are appended to preserve the original CSV prefix.
-        file << ",cmd_seq,cmd_sec,cmd_nanosec,cmd_time_sec,cmd_state_dt_sec";
-
-        const std::vector<std::string> cmd_fields = {"pos_cmd","tor_cmd","vel_cmd","mode_cmd"};
-        for (const auto &m : modules) {
-            for (const auto &j : joints) {
-                for (const auto &x : cmd_fields) {
-                    file << ",m" << m << "_" << j << "_" << x;
-                }
-            }
-        }
         file << "\n";
     }
 
     // ============================================================
     // Command buffer
     // ============================================================
-    void onMotorCmd_(const kilin_msgs::msg::MotorCmdStamped::SharedPtr msg) {
-        if (closed) return;
-        if (!logging_enabled_) return;
-
-        PendingCmd c;
-        c.msg = *msg;
-        c.tsec = toTimeSec_(msg->header.time.sec, msg->header.time.nanosec);
-        cmd_pending_.push_back(c);
-
-        trimCommandBuffer_();
-    }
+    // void onMotorCmd_(const kilin_msgs::msg::MotorCmdStamped::SharedPtr msg) {
+    //     if (closed) return;
+    //     if (!logging_enabled_) return;
+    //
+    //     PendingCmd c;
+    //     c.msg = *msg;
+    //     c.tsec = toTimeSec_(msg->header.time.sec, msg->header.time.nanosec);
+    //     cmd_pending_.push_back(c);
+    //
+    //     trimCommandBuffer_();
+    // }
 
     // ============================================================
     // Power pending (buffer by seq)
@@ -530,7 +521,7 @@ private:
             }
         }
 
-        trimCommandBuffer_();
+        // trimCommandBuffer_();
     }
 
     // ============================================================
@@ -577,26 +568,26 @@ private:
         try { file.flush(); } catch (...) {}
     }
 
-    void trimCommandBuffer_() {
-        if (cmd_buffer_size_ <= 0) {
-            cmd_pending_.clear();
-            return;
-        }
-
-        while (static_cast<int>(cmd_pending_.size()) > cmd_buffer_size_) {
-            cmd_pending_.pop_front();
-        }
-    }
-
-    bool popMatchingCmd_(PendingCmd &out_cmd) {
-        if (cmd_pending_.empty()) {
-            return false;
-        }
-
-        out_cmd = cmd_pending_.front();
-        cmd_pending_.pop_front();
-        return true;
-    }
+    // void trimCommandBuffer_() {
+    //     if (cmd_buffer_size_ <= 0) {
+    //         cmd_pending_.clear();
+    //         return;
+    //     }
+    //
+    //     while (static_cast<int>(cmd_pending_.size()) > cmd_buffer_size_) {
+    //         cmd_pending_.pop_front();
+    //     }
+    // }
+    //
+    // bool popMatchingCmd_(PendingCmd &out_cmd) {
+    //     if (cmd_pending_.empty()) {
+    //         return false;
+    //     }
+    //
+    //     out_cmd = cmd_pending_.front();
+    //     cmd_pending_.pop_front();
+    //     return true;
+    // }
 
     // ============================================================
     // Write one CSV row
@@ -607,8 +598,6 @@ private:
                    bool has_power,
                    const PendingPower *p) {
         const double m_t  = toTimeSec_(m.header.time.sec, m.header.time.nanosec);
-        PendingCmd c;
-        const bool has_cmd = popMatchingCmd_(c);
 
         // ----------------------------
         // Time (motor)
@@ -661,40 +650,6 @@ private:
             file << ",,,";
         }
 
-        if (has_cmd) {
-            const auto c_seq = c.msg.header.seq;
-            const auto c_sec = c.msg.header.time.sec;
-            const auto c_nsec = c.msg.header.time.nanosec;
-            const double c_t = c.tsec;
-            const double dt = m_t - c_t;
-
-            file << "," << c_seq << "," << c_sec << "," << c_nsec << ",";
-            file << std::fixed << std::setprecision(9) << c_t << ",";
-            file << std::fixed << std::setprecision(9) << dt;
-
-            auto append_cmd = [&](const auto &s) {
-                file << "," << s.position
-                     << "," << s.torque
-                     << "," << s.velocity
-                     << "," << static_cast<int>(s.motor_mode);
-            };
-
-            const auto &A_cmd = c.msg.module_a;
-            const auto &B_cmd = c.msg.module_b;
-            const auto &C_cmd = c.msg.module_c;
-            const auto &D_cmd = c.msg.module_d;
-
-            append_cmd(A_cmd.hip);      append_cmd(A_cmd.steering);      append_cmd(A_cmd.hub);
-            append_cmd(B_cmd.hip);      append_cmd(B_cmd.steering);      append_cmd(B_cmd.hub);
-            append_cmd(C_cmd.hip);      append_cmd(C_cmd.steering);      append_cmd(C_cmd.hub);
-            append_cmd(D_cmd.hip);      append_cmd(D_cmd.steering);      append_cmd(D_cmd.hub);
-        } else {
-            file << ",,,,";
-            for (int i = 0; i < 48; ++i) {
-                file << ",";
-            }
-        }
-
         file << "\n";
 
         motor_count++;
@@ -706,7 +661,7 @@ private:
     // ============================================================
     // Members
     // ============================================================
-    std::string motor_cmd_topic;
+    // std::string motor_cmd_topic;
     std::string motor_topic;
     std::string power_topic;
     int flush_every_n = 20;
@@ -726,7 +681,7 @@ private:
 
     // seq-join policy
     double pair_timeout_sec_ = 0.5;
-    int cmd_buffer_size_ = 200;
+    // int cmd_buffer_size_ = 200;
 
     // log settings
     std::string log_dir;
@@ -740,13 +695,13 @@ private:
     uint64_t motor_count = 0;
     bool closed = false;
 
-    rclcpp::Subscription<kilin_msgs::msg::MotorCmdStamped>::SharedPtr sub_motor_cmd;
+    // rclcpp::Subscription<kilin_msgs::msg::MotorCmdStamped>::SharedPtr sub_motor_cmd;
     rclcpp::Subscription<kilin_msgs::msg::MotorStateStamped>::SharedPtr sub_motor;
     rclcpp::Subscription<kilin_msgs::msg::PowerStateStamped>::SharedPtr sub_power;
     rclcpp::Subscription<kilin_msgs::msg::TriggerStamped>::SharedPtr sub_trigger;
 
     // pairing buffers
-    std::deque<PendingCmd> cmd_pending_;
+    // std::deque<PendingCmd> cmd_pending_;
     std::unordered_map<uint32_t, PendingMotor> motor_pending_;
     std::unordered_map<uint32_t, PendingPower> power_pending_;
 
