@@ -2,6 +2,7 @@
 #include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/u_int8.hpp"
+#include "std_msgs/msg/float64.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 
 #include <cmath>
@@ -23,6 +24,7 @@ public:
         deadzone_ = this->declare_parameter<double>("deadzone", 0.15);
         omega_axes_ = this->declare_parameter<int>("omega_axes", 2);
         enable_rest_mask_ = this->declare_parameter<bool>("enable_rest_mask", false);
+        hip_torque_limit_ = this->declare_parameter<double>("hip_torque_limit", 10.0);
 
         // -----------------------------
         // ROS interfaces
@@ -33,6 +35,18 @@ public:
         cmd_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/kilin/cmd_vel", 10);
 
         brake_pub_ = this->create_publisher<std_msgs::msg::Bool>("/kilin/brake_request", 10);
+
+        // Hip control mask output (Momentary)
+        //   - axes[7]=1  -> bit0 (A)
+        //   - axes[6]=-1 -> bit1 (B)
+        //   - axes[7]=-1 -> bit2 (C)
+        //   - axes[6]=1  -> bit3 (D)
+        hip_mask_pub_ = this->create_publisher<std_msgs::msg::UInt8>("/kilin/hip_control_mask", 10);
+
+        // Hip control torque output
+        //   - axes[4] -> positive torque (range 1 -> -1 maps to 0 -> 10)
+        //   - axes[3] -> negative torque (range 1 -> -1 maps to 0 -> 10)
+        hip_torque_pub_ = this->create_publisher<std_msgs::msg::Float64>("/kilin/hip_control_torque", 10);
 
         // Module rest mask output
         //   - buttons[0..3] -> modules A,B,C,D
@@ -69,6 +83,18 @@ public:
             rm.data = 0;
             rest_mask_pub_->publish(rm);   
         }
+
+        if (hip_mask_pub_) {
+            std_msgs::msg::UInt8 hm;
+            hm.data = 0;
+            hip_mask_pub_->publish(hm);
+        }
+
+        if (hip_torque_pub_) {
+            std_msgs::msg::Float64 ht;
+            ht.data = 0.0;
+            hip_torque_pub_->publish(ht);
+        }
     }
 
     static void signal_handler(int) {
@@ -82,6 +108,14 @@ public:
             std_msgs::msg::UInt8 rm;
             rm.data = 0;
             instance_->rest_mask_pub_->publish(rm);
+
+            std_msgs::msg::UInt8 hm;
+            hm.data = 0;
+            instance_->hip_mask_pub_->publish(hm);
+
+            std_msgs::msg::Float64 ht;
+            ht.data = 0.0;
+            instance_->hip_torque_pub_->publish(ht);
 
             RCLCPP_WARN(instance_->get_logger(), "Sent zero command before shutdown");
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -98,6 +132,17 @@ private:
 
         RCLCPP_INFO(this->get_logger(),
             "[REST MASK] A=%s  B=%s  C=%s  D=%s  (mask=0x%02X)",
+            st(0x01), st(0x02), st(0x04), st(0x08), mask);
+    }
+
+    // --------------------------------------
+    // Print hip control status (only when toggled)
+    // --------------------------------------
+    void log_hip_status(uint8_t mask) {
+        auto st = [&](uint8_t bit){ return (mask & bit) ? "ENABLED" : "DISABLED"; };
+
+        RCLCPP_INFO(this->get_logger(),
+            "[HIP MASK] A=%s  B=%s  C=%s  D=%s  (mask=0x%02X)",
             st(0x01), st(0x02), st(0x04), st(0x08), mask);
     }
 
@@ -165,6 +210,61 @@ private:
             latest_omega_ = apply_deadzone(msg->axes[omega_axes_]);
         else
             latest_omega_ = 0.0;
+
+        // ---------------------------------------------------------
+        // Hip control mask toggle (axes[6], axes[7])
+        //   - axes[7]=1  -> A (bit0)
+        //   - axes[6]=-1 -> B (bit1)
+        //   - axes[7]=-1 -> C (bit2)
+        //   - axes[6]=1  -> D (bit3)
+        // ---------------------------------------------------------
+        bool hip_toggled = false;
+        if (msg->axes.size() > 7) {
+            double cur7 = msg->axes[7];
+            // Up (A) toggle on transition 0 -> 1
+            if (cur7 == 1.0 && prev_ax7_ != 1.0) {
+                hip_mask_ ^= 0x01;
+                hip_toggled = true;
+            }
+            // Down (C) toggle on transition 0 -> -1
+            if (cur7 == -1.0 && prev_ax7_ != -1.0) {
+                hip_mask_ ^= 0x04;
+                hip_toggled = true;
+            }
+            prev_ax7_ = cur7;
+        }
+
+        if (msg->axes.size() > 6) {
+            double cur6 = msg->axes[6];
+            // Left (B) toggle on transition 0 -> -1
+            if (cur6 == -1.0 && prev_ax6_ != -1.0) {
+                hip_mask_ ^= 0x02;
+                hip_toggled = true;
+            }
+            // Right (D) toggle on transition 0 -> 1
+            if (cur6 == 1.0 && prev_ax6_ != 1.0) {
+                hip_mask_ ^= 0x08;
+                hip_toggled = true;
+            }
+            prev_ax6_ = cur6;
+        }
+
+        if (hip_toggled) {
+            log_hip_status(hip_mask_);
+        }
+
+        // ---------------------------------------------------------
+        // Hip control torque (axes[3], axes[4])
+        //   - Linear axes: 1 (unpressed) -> -1 (fully pressed)
+        //   - Map each to 0 -> hip_torque_limit_
+        // ---------------------------------------------------------
+        double torque_pos = 0.0;
+        if (msg->axes.size() > 4) torque_pos = (1.0 - msg->axes[4]) / 2.0 * hip_torque_limit_;
+
+        double torque_neg = 0.0;
+        if (msg->axes.size() > 3) torque_neg = (1.0 - msg->axes[3]) / 2.0 * hip_torque_limit_;
+
+        latest_hip_torque_ = torque_pos - torque_neg;
     }
 
     // --------------------------------------
@@ -189,6 +289,20 @@ private:
             rm.data = rest_mask_;
             rest_mask_pub_->publish(rm);
         }
+
+        if (hip_mask_pub_) {
+            // hip_control_mask @ 100 Hz
+            std_msgs::msg::UInt8 hm;
+            hm.data = hip_mask_;
+            hip_mask_pub_->publish(hm);
+        }
+
+        if (hip_torque_pub_) {
+            // hip_control_torque @ 100 Hz
+            std_msgs::msg::Float64 ht;
+            ht.data = latest_hip_torque_;
+            hip_torque_pub_->publish(ht);
+        }
     }
 
     // Send zero command
@@ -203,11 +317,14 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr brake_pub_;
     rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr rest_mask_pub_;
+    rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr hip_mask_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr hip_torque_pub_;
     rclcpp::TimerBase::SharedPtr timer_;
 
     // Parameters
     double Vmax_, Wmax_, deadzone_;
     int omega_axes_;
+    double hip_torque_limit_;
 
     // Latest joystick state
     double latest_vx_ = 0.0;
@@ -219,6 +336,14 @@ private:
     // Module rest mask (toggle)
     uint8_t rest_mask_ = 0;
     std::array<int, 4> prev_btn_{0, 0, 0, 0};
+
+    // Hip control mask (toggle)
+    uint8_t hip_mask_ = 0;
+    double prev_ax6_ = 0.0;
+    double prev_ax7_ = 0.0;
+
+    // Hip control torque
+    double latest_hip_torque_ = 0.0;
 
     static KilinJoystickInterface* instance_;
 };

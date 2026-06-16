@@ -8,6 +8,7 @@ def launch_setup(context, *args, **kwargs):
 
     device = LaunchConfiguration('device').perform(context)
     vmax   = float(LaunchConfiguration('vmax').perform(context))
+    hip_torque_limit = float(LaunchConfiguration('hip_torque_limit').perform(context))
 
     # Axis mapping
     if device == "pc":
@@ -25,7 +26,8 @@ def launch_setup(context, *args, **kwargs):
             'vmax': vmax,
             'wmax': 2.0,
             'deadzone': 0.1,
-            'enable_rest_mask': True
+            'enable_rest_mask': True,
+            'hip_torque_limit': hip_torque_limit
         }]
     )
 
@@ -65,6 +67,12 @@ def generate_launch_description():
             'vmax',
             default_value='1.0',
             description='Max linear velocity'
+        ),
+
+        DeclareLaunchArgument(
+            'hip_torque_limit',
+            default_value='10.0',
+            description='Max hip torque'
         ),
 
         OpaqueFunction(function=launch_setup)

@@ -227,19 +227,17 @@ private:
     }
 
     fs::path makeUniquePath_(const fs::path &p) {
-        if (!fs::exists(p)) return p;
-
         fs::path dir = p.parent_path();
         std::string stem = p.stem().string();
         std::string ext  = p.extension().string();
 
         for (int k = 1; k < 10000; ++k) {
             std::ostringstream oss;
-            oss << stem << "_" << std::setw(3) << std::setfill('0') << k << ext;
+            oss << stem << "_log" << std::setw(2) << std::setfill('0') << k << ext;
             fs::path cand = dir / oss.str();
             if (!fs::exists(cand)) return cand;
         }
-        return dir / (stem + "_overflow" + ext);
+        return dir / (stem + "_log_overflow" + ext);
     }
 
     fs::path getKilinWsLogsDir_() {

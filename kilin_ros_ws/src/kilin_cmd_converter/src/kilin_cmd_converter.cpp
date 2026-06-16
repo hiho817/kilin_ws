@@ -1,6 +1,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/u_int8.hpp"
+#include "std_msgs/msg/float64.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "kilin_msgs/msg/motor_cmd_stamped.hpp"
 #include "kilin_msgs/msg/leg_cmd.hpp"
@@ -83,6 +84,15 @@ public:
             RCLCPP_WARN(get_logger(), "REST MASK enabled (debug feature).");
         }
 
+        // Hip control subscriptions
+        sub_hip_mask = create_subscription<std_msgs::msg::UInt8>(
+            "/kilin/hip_control_mask", 10,
+            std::bind(&KilinCmdConverter::hipMaskCallback, this, std::placeholders::_1));
+        
+        sub_hip_torque = create_subscription<std_msgs::msg::Float64>(
+            "/kilin/hip_control_torque", 10,
+            std::bind(&KilinCmdConverter::hipTorqueCallback, this, std::placeholders::_1));
+
         pub_motor = create_publisher<kilin_msgs::msg::MotorCmdStamped>(
             "/kilin/motor_cmd_raw", 10);
 
@@ -122,12 +132,23 @@ private:
     static constexpr int HUB_BRAKE_MODE = 7;
     static constexpr int POSITION_MODE  = 4;
     static constexpr int VELOCITY_MODE  = 5;
+    static constexpr int TORQUE_MODE    = 6;
 
     // ============================================================
     // Steering safety bound (prevent cable twisting)
-    //   - You said: allow at most one turn forward/backward
     // ============================================================
     static constexpr double STEER_BOUND = 2.0 * M_PI;   // ±2π
+
+    // ============================================================
+    // Hip control callbacks
+    // ============================================================
+    void hipMaskCallback(const std_msgs::msg::UInt8::SharedPtr msg) {
+        hip_mask.store(msg->data, std::memory_order_relaxed);
+    }
+
+    void hipTorqueCallback(const std_msgs::msg::Float64::SharedPtr msg) {
+        hip_torque.store(msg->data, std::memory_order_relaxed);
+    }
 
     // ============================================================
     // Brake request callback
@@ -382,10 +403,21 @@ private:
             // Build ROS motor command for this module
             // -----------------------------------------------------
             kilin_msgs::msg::MotorCmd hip;
-            hip.motor_mode = POSITION_MODE;
-            hip.kp = 350.0;
-            hip.ki = 0.0;
-            hip.kd = 5.0;
+            
+            // Default hip behavior: REST (as requested by user)
+            uint8_t h_mask = hip_mask.load(std::memory_order_relaxed);
+            bool hip_enabled = false;
+            if (key == "A") hip_enabled = (h_mask & 0x01);
+            if (key == "B") hip_enabled = (h_mask & 0x02);
+            if (key == "C") hip_enabled = (h_mask & 0x04);
+            if (key == "D") hip_enabled = (h_mask & 0x08);
+
+            if (hip_enabled) {
+                hip.motor_mode = TORQUE_MODE;
+                hip.torque = (float)hip_torque.load(std::memory_order_relaxed);
+            } else {
+                hip.motor_mode = HIP_REST_MODE;
+            }
 
             kilin_msgs::msg::MotorCmd steering;
             steering.motor_mode = POSITION_MODE;
@@ -460,6 +492,10 @@ private:
     // module rest mask (debug)
     std::atomic<uint8_t> rest_mask{0};
 
+    // hip control
+    std::atomic<uint8_t> hip_mask{0};
+    std::atomic<double> hip_torque{0.0};
+
     // vy gating
     double e_full, e_stop, g_min;
     double dg_down, dg_up;
@@ -475,6 +511,8 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_cmdvel;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_brake;
     rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr sub_rest_mask;
+    rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr sub_hip_mask;
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr sub_hip_torque;
     rclcpp::Publisher<kilin_msgs::msg::MotorCmdStamped>::SharedPtr pub_motor;
 
     static KilinCmdConverter *instance_;
