@@ -502,9 +502,9 @@ class KilinPanel(QtWidgets.QMainWindow, Ui_MainWindow):
             for module_name, joints in event.modules_state.items():
                 module_panel = getattr(self, f"module_{module_name.lower()}", None)
                 if module_panel:
-                    for joint_name, (pos, vel, tor, mode, error) in joints.items():
+                    for joint_name, (pos, vel, tor, mode, error, pos_diff) in joints.items():
                         module_panel.update_motor_state(
-                            joint_name, pos, vel, tor, mode, error
+                            joint_name, pos, vel, tor, mode, error, pos_diff
                         )
 
                         # -------------------------------------------------

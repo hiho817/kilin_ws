@@ -174,6 +174,7 @@ void grpc_motor_state_cb(motor_msg::MotorStateStamped state) {
         dst->hip.torque   = src->hip().torque();
         dst->hip.motor_mode = static_cast<int32_t>(src->hip().motor_mode());
         dst->hip.error_code = static_cast<int32_t>(src->hip().error_code());
+        dst->hip.position_diff = src->hip().position_diff();
 
         // steering
         dst->steering.position = src->steering().position();
@@ -181,6 +182,7 @@ void grpc_motor_state_cb(motor_msg::MotorStateStamped state) {
         dst->steering.torque   = src->steering().torque();
         dst->steering.motor_mode = static_cast<int32_t>(src->steering().motor_mode());
         dst->steering.error_code = static_cast<int32_t>(src->steering().error_code());
+        dst->steering.position_diff = src->steering().position_diff();
 
         // hub
         dst->hub.position = src->hub().position();
@@ -188,6 +190,7 @@ void grpc_motor_state_cb(motor_msg::MotorStateStamped state) {
         dst->hub.torque   = src->hub().torque();
         dst->hub.motor_mode = static_cast<int32_t>(src->hub().motor_mode());
         dst->hub.error_code = static_cast<int32_t>(src->hub().error_code());
+        dst->hub.position_diff = src->hub().position_diff();
     }
 
     // Copy header information.

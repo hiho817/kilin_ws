@@ -61,12 +61,15 @@ class ModulePanel(QtWidgets.QWidget, Ui_Form):
         }
 
     # Update displayed state values (from ROS feedback)
-    def update_motor_state(self, name, pos, vel, tor, mode=None, error=None):
+    def update_motor_state(self, name, pos, vel, tor, mode=None, error=None, pos_diff=None):
         # Convert rad → deg
         pos_deg = math.degrees(pos)
         getattr(self, f"text_{name}_pos_state").setText(f"{pos_deg:.5f}")
         getattr(self, f"text_{name}_vel_state").setText(f"{vel:.5f}")
         getattr(self, f"text_{name}_tor_state").setText(f"{tor:.5f}")
+
+        if name == "hip" and pos_diff is not None:
+            self.text_hip_pos_state_diff.setText(f"{math.degrees(pos_diff):.5f}")
 
         # Motor mode (optional)
         if mode is not None:

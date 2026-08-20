@@ -385,6 +385,9 @@ private:
                 for (const auto &x : fields) {
                     file << ",m" << m << "_" << j << "_" << x;
                 }
+                if (j == "hip") {
+                    file << ",m" << m << "_" << j << "_pos_diff";
+                }
             }
         }
 
@@ -617,16 +620,20 @@ private:
                  << "," << static_cast<int>(s.motor_mode)
                  << "," << static_cast<int>(s.error_code);
         };
+        auto append_hip_state = [&](const auto &s) {
+            append_state(s);
+            file << "," << s.position_diff;
+        };
 
         const auto &A = m.module_a;
         const auto &B = m.module_b;
         const auto &C = m.module_c;
         const auto &D = m.module_d;
 
-        append_state(A.hip);      append_state(A.steering);      append_state(A.hub);
-        append_state(B.hip);      append_state(B.steering);      append_state(B.hub);
-        append_state(C.hip);      append_state(C.steering);      append_state(C.hub);
-        append_state(D.hip);      append_state(D.steering);      append_state(D.hub);
+        append_hip_state(A.hip);  append_state(A.steering);      append_state(A.hub);
+        append_hip_state(B.hip);  append_state(B.steering);      append_state(B.hub);
+        append_hip_state(C.hip);  append_state(C.steering);      append_state(C.hub);
+        append_hip_state(D.hip);  append_state(D.steering);      append_state(D.hub);
 
         // ----------------------------
         // Append power (paired by seq) or leave empty
