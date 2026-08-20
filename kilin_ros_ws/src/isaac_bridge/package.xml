@@ -3,7 +3,7 @@
 <package format="3">
   <name>isaac_bridge</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>ROS 2 command and sensor bridge for the Kilin base in Isaac Sim.</description>
   <maintainer email="brl--pc6@todo.todo">brl--pc6</maintainer>
   <license>TODO: License declaration</license>
 
@@ -12,6 +12,7 @@
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>kilin_msgs</depend>
+  <depend>std_msgs</depend>
   
   <exec_depend>kilin_cmd_converter</exec_depend>
 

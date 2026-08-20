@@ -349,13 +349,13 @@ private:
                                    p0.a_hip_pos, p1.a_hip_pos,
                                    p0.a_steer_pos, p1.a_steer_pos,
                                    p1.a_hub_vel,
-                                   p1.a_hub_mode, true);
+                                   p1.a_hub_mode);
 
         msg.module_b = buildLegCmd(t, p0, p1,
                                    p0.b_hip_pos, p1.b_hip_pos,
                                    p0.b_steer_pos, p1.b_steer_pos,
                                    p1.b_hub_vel,
-                                   p1.b_hub_mode, true);
+                                   p1.b_hub_mode);
 
         msg.module_c = buildLegCmd(t, p0, p1,
                                    p0.c_hip_pos, p1.c_hip_pos,

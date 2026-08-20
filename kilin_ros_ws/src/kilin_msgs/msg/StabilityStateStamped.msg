@@ -1,0 +1,11 @@
+Headers header
+int32 phase
+string swing_leg
+bool valid
+bool inside
+bool safe
+float64 stability_margin
+float64 required_margin
+geometry_msgs/Point com_projection
+geometry_msgs/Polygon support_polygon
+geometry_msgs/Vector3 correction_direction

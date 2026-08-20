@@ -1,0 +1,28 @@
+# Goal: command one joint-space point-to-point motion.
+string[] joint_names
+float64[] positions
+float64[] velocities
+float64 duration_sec
+---
+# Result error codes.
+int32 SUCCESS=0
+int32 INVALID_GOAL=1
+int32 CONTROLLER_UNAVAILABLE=2
+int32 CONTROLLER_REJECTED=3
+int32 TRAJECTORY_ABORTED=4
+int32 CANCELED=5
+int32 TIMEOUT=6
+int32 FINAL_ERROR_TOO_LARGE=7
+int32 INTERNAL_ERROR=8
+
+bool success
+int32 error_code
+float64 final_max_joint_error
+string message
+---
+# Feedback from the active PTP motion.
+float64 progress
+float64 max_joint_error
+float64 elapsed_sec
+float64 remaining_sec
+string state

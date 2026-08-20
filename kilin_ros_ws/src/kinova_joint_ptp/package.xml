@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>kinova_joint_ptp</name>
+  <version>0.1.0</version>
+  <description>Hardware-agnostic ROS 2 joint-space PTP action server for Kinova Gen3.</description>
+  <maintainer email="ian20030201@gmail.com">ian920201</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>control_msgs</depend>
+  <depend>kinova_ptp_interfaces</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>sensor_msgs</depend>
+  <depend>trajectory_msgs</depend>
+
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

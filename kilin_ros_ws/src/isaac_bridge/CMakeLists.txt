@@ -10,6 +10,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(kilin_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 
 # 定義執行檔
 add_executable(isaac_converter src/isaac_converter.cpp)
@@ -18,6 +19,7 @@ ament_target_dependencies(isaac_converter
   rclcpp 
   sensor_msgs 
   kilin_msgs
+  std_msgs
 )
 
 # 安裝設定 (讓 ros2 run 找得到)

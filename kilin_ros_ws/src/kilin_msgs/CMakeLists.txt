@@ -23,6 +23,9 @@ set(msg_files
   "msg/PowerCmdStamped.msg"
   "msg/PowerStateStamped.msg"
   "msg/TriggerStamped.msg"
+  "msg/BalanceStateStamped.msg"
+  "msg/StairPhaseStamped.msg"
+  "msg/StabilityStateStamped.msg"
 )
 
 # Generate the message interfaces
