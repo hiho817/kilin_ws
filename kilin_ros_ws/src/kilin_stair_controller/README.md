@@ -75,6 +75,56 @@ The input positions and COM are currently expected in the world frame.
 is selected. Keep it at zero while AMR +X and world +X are aligned; update it if
 the robot begins with a nonzero heading.
 
+## Offline gait generator
+
+`generate_stair_csv` generates a controller-compatible CSV from the validated
+`alex_v2.csv` entry and middle-stair templates. The current version intentionally
+accepts only a 0.35 m rise and 0.10 m run. Other dimensions require a future
+robot/stair geometry solver and are rejected instead of being scaled heuristically.
+
+After building and sourcing the workspace:
+
+```bash
+ros2 run kilin_stair_controller generate_stair_csv \
+  --rise 0.35 \
+  --run 0.10 \
+  --middle-cycles 1 \
+  --output ~/kilin_ws/csv/generated/stair_35_10_cycle1.csv
+```
+
+The generated one-cycle gait is identical to `alex_v2.csv` from 0 through 52 s.
+Additional middle cycles repeat the validated 35--52 s motion, add 20 s per
+cycle, and add 360 degrees to every continuous hip target. Hip angles are never
+normalized modulo 360 degrees; in particular, the FR 10-to-320-degree swing
+remains a continuous +310-degree motion.
+
+The final row is phase 0 at the canonical middle-cycle end pose. The controller
+holds that last command after playback finishes. To append the final-approach
+bridge and validated stage-3 gait, add `--include-stage3`:
+
+```bash
+ros2 run kilin_stair_controller generate_stair_csv \
+  --rise 0.35 \
+  --run 0.10 \
+  --middle-cycles 1 \
+  --include-stage3 \
+  --output ~/kilin_ws/csv/generated/stair_35_10_full.csv
+```
+
+With one middle cycle, this output is identical to the complete `alex_v2.csv`
+through t=75 s. Each extra middle cycle shifts stage 3 by 20 s and adds 360
+degrees to every stage-3 continuous hip target.
+
+The output command refuses to overwrite an existing CSV unless `--force` is
+given. Run it with the existing controller using, for example:
+
+```bash
+ros2 launch kilin_stair_controller launch.py \
+  use_sim_time:=true \
+  csv_name:=generated/stair_35_10_cycle1.csv \
+  arm_control_mode:=com_closed_loop
+```
+
 For example, if the row at 2 seconds has phase 0 and the row at 5 seconds changes
 the hips and has phase 2, Kinova reaches the phase-2 pose at 2 seconds before the
 2-to-5-second command interpolation begins. Likewise, if a row at 15 seconds has

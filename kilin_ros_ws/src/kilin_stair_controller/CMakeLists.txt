@@ -31,11 +31,16 @@ target_link_libraries(kilin_stair_controller ${LIBGPIOD_LIBRARIES})
 target_compile_options(kilin_stair_controller PRIVATE ${LIBGPIOD_CFLAGS_OTHER})
 
 install(TARGETS kilin_stair_controller DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/generate_stair_csv.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME generate_stair_csv
+)
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
   find_package(ament_lint_auto REQUIRED)
   # package.xml still has a TODO license, so do not claim a license here.
   set(ament_cmake_copyright_FOUND TRUE)
@@ -46,6 +51,8 @@ if(BUILD_TESTING)
     target_compile_features(test_support_geometry PUBLIC cxx_std_17)
     target_include_directories(test_support_geometry PRIVATE include)
   endif()
+
+  ament_add_pytest_test(test_generate_stair_csv test/test_generate_stair_csv.py)
 endif()
 
 ament_package()
