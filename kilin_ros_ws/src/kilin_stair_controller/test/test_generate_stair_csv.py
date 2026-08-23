@@ -92,9 +92,111 @@ class GenerateStairCsvTest(unittest.TestCase):
                 transitions.append(row.arm_phase)
         self.assertEqual([4, 0, 3, 0, 2, 0], transitions)
 
-    def test_unknown_stair_dimensions_are_rejected(self):
-        with self.assertRaisesRegex(ValueError, "only the validated"):
-            generator.generate_gait(rise_m=0.30, run_m=0.10)
+    def test_rise_changes_calculated_fr_lift_angle(self):
+        rows = generator.generate_gait(rise_m=0.15)
+        lift_row = next(row for row in rows if row.arm_phase == 2)
+        self.assertLess(lift_row.hips[1], -90.0)
+
+    def test_validated_geometry_reconstructs_independent_angles(self):
+        angles = generator.calculate_geometry_angles(0.10, 0.35)
+        self.assertEqual(40.0, angles.outward_deg)
+        self.assertEqual(90.0, angles.lift_deg)
+        self.assertEqual(20.0, angles.transition_deg)
+        self.assertEqual(0.0, angles.rear_landing_correction_deg)
+        self.assertEqual(0.0, angles.middle_fl_retreat_command)
+
+    def test_dimensions_change_middle_cycle_and_stage3_hip_angles(self):
+        reference = generator.calculate_geometry_angles(0.10, 0.35)
+        variant = generator.calculate_geometry_angles(0.15, 0.40)
+        reference_cycle = generator.build_climb_cycle(reference)
+        variant_cycle = generator.build_climb_cycle(variant)
+        reference_stage3 = generator.build_stage3(reference)
+        variant_stage3 = generator.build_stage3(variant)
+
+        self.assertNotEqual(reference_cycle[3].hip_offset, variant_cycle[3].hip_offset)
+        self.assertNotEqual(reference_stage3[0].hip_offset, variant_stage3[0].hip_offset)
+
+    def test_validated_start_clearance_uses_robot_geometry(self):
+        clearance = generator.initial_front_clearance_m(0.63)
+        self.assertAlmostEqual(0.173589160, clearance, places=9)
+
+    def test_run_scales_noninitial_hub_only_duration(self):
+        rows = generator.generate_gait(run_m=0.70)
+        drive_start = next(row for row in rows if row.hips == (320.0, -40.0, 40.0, 40.0))
+        following = rows[rows.index(drive_start) + 1]
+        self.assertEqual(2.0, following.time - drive_start.time)
+
+    def test_taller_rise_extends_approach_before_second_fr_lift(self):
+        reference = generator.generate_gait(rise_m=0.10)
+        taller = generator.generate_gait(rise_m=0.12)
+
+        reference_start = next(
+            row for row in reference
+            if row.hips == (320.0, -40.0, 40.0, 40.0)
+        )
+        taller_start = next(
+            row for row in taller
+            if row.hips == (320.0, -40.0, 40.0, 40.0)
+        )
+        reference_stop = reference[reference.index(reference_start) + 1]
+        taller_stop = taller[taller.index(taller_start) + 1]
+
+        extra_duration = (
+            generator.entry_approach_rise_correction_m(0.12)
+            / generator.ideal_hub_speed_mps(100.0)
+        )
+        self.assertAlmostEqual(
+            (reference_stop.time - reference_start.time) + extra_duration,
+            taller_stop.time - taller_start.time,
+            places=8,
+        )
+        self.assertAlmostEqual(0.056, generator.entry_approach_rise_correction_m(0.12))
+
+    def test_shorter_rise_does_not_remove_entry_clearance(self):
+        self.assertEqual(0.0, generator.entry_approach_rise_correction_m(0.08))
+
+    def test_taller_rise_moves_rear_landing_support_rearward(self):
+        angles = generator.calculate_geometry_angles(0.12, 0.35)
+        cycle = generator.build_climb_cycle(angles)
+
+        self.assertAlmostEqual(2.0, angles.rear_landing_correction_deg)
+        self.assertAlmostEqual(282.0, cycle[0].hip_offset[3])
+        self.assertAlmostEqual(282.0, cycle[2].hip_offset[2])
+
+    def test_taller_rise_adds_validated_middle_fl_retreat(self):
+        reference = generator.build_climb_cycle(
+            generator.calculate_geometry_angles(0.10, 0.35)
+        )
+        taller = generator.build_climb_cycle(
+            generator.calculate_geometry_angles(0.12, 0.35)
+        )
+
+        self.assertEqual((0.0, 0.0, 0.0, 0.0), reference[4].hub_velocity)
+        self.assertEqual((-50.0, -50.0, -50.0, -50.0), taller[4].hub_velocity)
+
+    def test_stage3_returns_to_validated_flat_top_targets(self):
+        rows = generator.generate_gait(
+            rise_m=0.12, run_m=0.35, include_stage3=True
+        )
+
+        self.assertIn((1040.0, 320.0, 760.0, 760.0), [row.hips for row in rows])
+        self.assertIn((1140.0, 320.0, 760.0, 760.0), [row.hips for row in rows])
+        self.assertEqual((1080.0, 360.0, 1080.0, 1080.0), rows[-1].hips)
+
+    def test_center_distance_changes_only_initial_approach_duration(self):
+        reference = generator.generate_gait()
+        farther = generator.generate_gait(center_to_first_riser_m=0.70)
+        self.assertGreater(farther[3].time - farther[2].time, 2.0)
+        first_shift = farther[3].time - reference[3].time
+        self.assertAlmostEqual(first_shift, farther[-1].time - reference[-1].time)
+
+    def test_unreachable_rise_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "exceeds leg reach"):
+            generator.generate_gait(rise_m=0.50)
+
+    def test_stair_slope_outside_outward_geometry_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "stair slope"):
+            generator.generate_gait(rise_m=0.35, run_m=0.10)
 
     def test_existing_output_requires_force(self):
         rows = generator.generate_gait()

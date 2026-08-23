@@ -2,8 +2,8 @@
 """
 Generate validated Kilin stair-gait CSV templates.
 
-The first implementation deliberately supports only the validated 0.35 m rise,
-0.10 m run gait.  It can repeat the validated 35--52 s middle-stair cycle while
+The first implementation deliberately supports only the validated 0.10 m rise,
+0.35 m run gait.  It can repeat the validated 35--52 s middle-stair cycle while
 preserving continuous hip angles, then optionally append the validated final
 approach and stage-3 templates through t=75 s.
 """
@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -27,9 +27,40 @@ CSV_HEADER = (
     "arm_phase",
 )
 
-VALIDATED_RISE_M = 0.35
-VALIDATED_RUN_M = 0.10
-DIMENSION_TOLERANCE_M = 1e-6
+VALIDATED_RISE_M = 0.10
+VALIDATED_RUN_M = 0.35
+VALIDATED_CENTER_TO_FIRST_RISER_M = 0.63
+
+# Robot dimensions mirrored from /home/brl--pc5/kilin_stairs/cars.py.  Keeping
+# them explicit here makes the installed ROS executable self-contained.
+BODY_LENGTH_M = 0.555
+PIVOT_OFFSET_M = 0.0375
+LEG_LENGTH_M = 0.255
+WHEEL_RADIUS_M = 0.0525
+OUTWARD_ANGLE_DEG = 40.0
+REFERENCE_LIFT_ANGLE_DEG = 90.0
+REFERENCE_TRANSITION_ANGLE_DEG = 20.0
+HUB_COMMAND_TO_RPM = 0.1
+
+# Open-loop entry calibration from the 0.12 m-rise / 0.35 m-run rosbag.  At the
+# second FR swing, the wheel center was 0.056 m behind the successful 0.10 m
+# baseline.  Apply that measured setback to the hub-only approach immediately
+# before the second FR lift.  Keeping this as an explicit gain makes the
+# calibration auditable and preserves the validated 0.10 m CSV byte-for-byte.
+ENTRY_APPROACH_RISE_GAIN = 2.8
+
+# In the same 0.12/0.35 test, phase 3 reached only 13.86 mm at full arm
+# extension because the RR--FL support edge was about 1.14 mm too close to the
+# COM.  Moving the planted RR wheel rearward by roughly 2.4 mm is sufficient;
+# a +2 degree rear landing correction gives about 6--7 mm of wheel-center
+# reserve.  Scale from zero at the validated 0.10 m rise.
+REAR_LANDING_RISE_GAIN_DEG_PER_M = 100.0
+
+# The 0.12/0.35 log04 gait succeeded after adding -50 hub command during the
+# two-second FL transfer toward the second tread.  This is about 55 mm of ideal
+# retreat and keeps the descending FL wheel behind the third riser.  Scale the
+# command from zero at the validated 0.10 m rise.
+MIDDLE_FL_RETREAT_COMMAND_PER_M = 2500.0
 
 ZERO4 = (0.0, 0.0, 0.0, 0.0)
 MODE0 = (0, 0, 0, 0)
@@ -78,30 +109,6 @@ def _row(
     )
 
 
-# Validated alex_v2 entry, including the transition to the canonical middle-cycle
-# base pose at t=32 s.  Logical hip angles remain continuous and are never wrapped.
-ENTRY_ROWS = (
-    _row(0, (0, 0, 0, 0)),
-    _row(3, (-40, -40, 40, 40), hub_mode=MODE0),
-    _row(6, (-40, -90, 40, 40), arm_phase=2),
-    _row(8, (-40, -90, 40, 40), (125, 125, 125, 125), arm_phase=2),
-    _row(9, (-40, -90, 40, 40), arm_phase=2),
-    _row(11, (0, -40, 40, 40), (8, 8, 8, 8), arm_phase=2),
-    _row(12, (0, -40, 40, 40)),
-    _row(15, (320, -40, 40, 40), arm_phase=1),
-    _row(16, (320, -40, 40, 40), (100, 100, 100, 100)),
-    _row(17, (320, -40, 40, 40)),
-    _row(20, (320, -90, 40, 40), arm_phase=2),
-    _row(22, (320, -90, 40, 40), (125, 125, 125, 125), arm_phase=2),
-    _row(23, (320, -90, 40, 40), arm_phase=2),
-    _row(26, (360, -40, 40, 40), (8, 8, 8, 8), arm_phase=2),
-    _row(27, (360, -40, 40, 40)),
-    _row(29, (400, -40, 40, 40), arm_phase=1),
-    _row(31, (400, -40, 40, 40), (100, 100, 100, 100)),
-    _row(32, (400, -40, 40, 40)),
-)
-
-
 @dataclass(frozen=True)
 class CyclePoint:
     relative_time: float
@@ -111,76 +118,349 @@ class CyclePoint:
     arm_phase: int = 0
 
 
-# Validated alex_v2 t=35--52 middle-stair motion, expressed relative to the
-# t=32 base pose [400, -40, 40, 40] deg.  The final offset is +360 deg for all
-# legs, making the cycle repeatable without modulo normalization.
-CLIMB_CYCLE = (
-    CyclePoint(3, (0, 0, 0, 280), hub_mode=(5, 5, 5, 0), arm_phase=4),
-    CyclePoint(4, (0, 0, 0, 280)),
-    CyclePoint(6, (0, 0, 280, 280), hub_mode=(5, 5, 0, 5), arm_phase=3),
-    CyclePoint(8, (0, 0, 300, 300)),
-    CyclePoint(10, (300, 20, 300, 300)),
-    CyclePoint(12, (330, 50, 330, 330)),
-    CyclePoint(13, (330, 50, 340, 340)),
-    CyclePoint(18, (330, 360, 340, 340), hub_mode=(5, 0, 5, 5), arm_phase=2),
-    CyclePoint(19, (330, 360, 340, 340), hub_velocity=(100, 100, 100, 100)),
-    CyclePoint(20, (360, 360, 360, 360)),
-)
+@dataclass(frozen=True)
+class GeometryAngles:
+    """Independent angles from which every continuous hip target is built."""
 
-CYCLE_DURATION_SEC = CLIMB_CYCLE[-1].relative_time
+    outward_deg: float
+    lift_deg: float
+    transition_deg: float
+    rear_landing_correction_deg: float
+    middle_fl_retreat_command: float
 
 
-# Bridge from the canonical middle-cycle end pose to the stage-3 start pose.
-# Times and offsets are relative to alex_v2 t=52 s.
-FINAL_APPROACH = (
-    CyclePoint(2, (0, 0, 0, 280), hub_mode=(5, 5, 5, 0), arm_phase=4),
-    CyclePoint(3, (0, 0, 0, 280)),
-    CyclePoint(5, (0, 0, 280, 280), hub_mode=(5, 5, 0, 5), arm_phase=3),
-    CyclePoint(7, (0, 0, 300, 300), hub_velocity=(-20, -20, -20, -40)),
-    CyclePoint(9, (300, 20, 300, 300)),
-    CyclePoint(10, (300, 20, 300, 300), hub_velocity=(100, 100, 100, 100)),
-    CyclePoint(11, (300, 20, 300, 300)),
-)
+CYCLE_DURATION_SEC = 20.0
 
 
-# User-validated final-stair gait. Times and offsets are relative to the stage-3
-# start pose at alex_v2 t=63 s [1060, 340, 700, 700] deg.
-STAGE3 = (
-    CyclePoint(2, (-20, -20, 60, 60), hub_mode=(0, 0, 5, 5)),
-    CyclePoint(3, (30, 30, 60, 60), hub_mode=(0, 0, 5, 5)),
-    CyclePoint(4, (80, -20, 60, 60), hub_mode=(0, 0, 5, 5)),
-    CyclePoint(7, (80, -20, 60, 340), hub_mode=(5, 5, 5, 0), arm_phase=4),
-    CyclePoint(10, (80, -20, 340, 340), hub_mode=(5, 5, 0, 5), arm_phase=3),
-    CyclePoint(12, (20, 20, 380, 380), hub_mode=MODE0),
-)
+def build_entry_rows(angles: GeometryAngles) -> tuple[GaitRow, ...]:
+    """Build state 1 from geometry angles instead of copied hip literals."""
+    outward = angles.outward_deg
+    lift = angles.lift_deg
+    front_landing = 360.0 - outward
+    front_next_support = 360.0 + outward
+    return (
+        _row(0, (0, 0, 0, 0)),
+        _row(3, (-outward, -outward, outward, outward), hub_mode=MODE0),
+        _row(6, (-outward, -lift, outward, outward), arm_phase=2),
+        _row(8, (-outward, -lift, outward, outward), (125, 125, 125, 125), arm_phase=2),
+        _row(9, (-outward, -lift, outward, outward), arm_phase=2),
+        _row(11, (0, -outward, outward, outward), (8, 8, 8, 8), arm_phase=2),
+        _row(12, (0, -outward, outward, outward)),
+        _row(15, (front_landing, -outward, outward, outward), arm_phase=1),
+        _row(16, (front_landing, -outward, outward, outward), (100, 100, 100, 100)),
+        _row(17, (front_landing, -outward, outward, outward)),
+        _row(20, (front_landing, -lift, outward, outward), arm_phase=2),
+        _row(22, (front_landing, -lift, outward, outward), (125, 125, 125, 125), arm_phase=2),
+        _row(23, (front_landing, -lift, outward, outward), arm_phase=2),
+        _row(26, (360, -outward, outward, outward), (8, 8, 8, 8), arm_phase=2),
+        _row(27, (360, -outward, outward, outward)),
+        _row(29, (front_next_support, -outward, outward, outward), arm_phase=1),
+        _row(31, (front_next_support, -outward, outward, outward), (100, 100, 100, 100)),
+        _row(32, (front_next_support, -outward, outward, outward)),
+    )
 
 
-def validate_dimensions(rise_m: float, run_m: float) -> None:
-    if not math.isfinite(rise_m) or not math.isfinite(run_m):
-        raise ValueError("stair dimensions must be finite")
-    if rise_m <= 0.0 or run_m <= 0.0:
-        raise ValueError("stair rise and run must be positive")
-    if (
-        abs(rise_m - VALIDATED_RISE_M) > DIMENSION_TOLERANCE_M
-        or abs(run_m - VALIDATED_RUN_M) > DIMENSION_TOLERANCE_M
-    ):
+def build_climb_cycle(angles: GeometryAngles) -> tuple[CyclePoint, ...]:
+    """Build the repeatable middle-stair hip offsets geometrically."""
+    outward = angles.outward_deg
+    transition = angles.transition_deg
+    landing = (
+        360.0 - 2.0 * outward + angles.rear_landing_correction_deg
+    )
+    preload = landing + transition
+    centered = 360.0 - outward + transition / 2.0
+    front_centered = outward + transition / 2.0
+    advanced = 360.0 - outward + transition
+    retreat = (angles.middle_fl_retreat_command,) * 4
+    return (
+        CyclePoint(3, (0, 0, 0, landing), hub_mode=(5, 5, 5, 0), arm_phase=4),
+        CyclePoint(4, (0, 0, 0, landing)),
+        CyclePoint(6, (0, 0, landing, landing), hub_mode=(5, 5, 0, 5), arm_phase=3),
+        CyclePoint(8, (0, 0, preload, preload)),
+        CyclePoint(10, (preload, transition, preload, preload), hub_velocity=retreat),
+        CyclePoint(12, (centered, front_centered, centered, centered)),
+        CyclePoint(13, (centered, front_centered, advanced, advanced)),
+        CyclePoint(18, (centered, 360, advanced, advanced), hub_mode=(5, 0, 5, 5), arm_phase=2),
+        CyclePoint(19, (centered, 360, advanced, advanced), hub_velocity=(100, 100, 100, 100)),
+        CyclePoint(20, (360, 360, 360, 360)),
+    )
+
+
+def build_final_approach(angles: GeometryAngles) -> tuple[CyclePoint, ...]:
+    outward = angles.outward_deg
+    transition = angles.transition_deg
+    landing = (
+        360.0 - 2.0 * outward + angles.rear_landing_correction_deg
+    )
+    preload = landing + transition
+    return (
+        CyclePoint(2, (0, 0, 0, landing), hub_mode=(5, 5, 5, 0), arm_phase=4),
+        CyclePoint(3, (0, 0, 0, landing)),
+        CyclePoint(5, (0, 0, landing, landing), hub_mode=(5, 5, 0, 5), arm_phase=3),
+        CyclePoint(7, (0, 0, preload, preload), hub_velocity=(-20, -20, -20, -40)),
+        CyclePoint(9, (preload, transition, preload, preload)),
+        CyclePoint(10, (preload, transition, preload, preload), hub_velocity=(100, 100, 100, 100)),
+        CyclePoint(11, (preload, transition, preload, preload)),
+    )
+
+
+def build_stage3(angles: GeometryAngles) -> tuple[CyclePoint, ...]:
+    """
+    Return the validated flat-top targets relative to the generated base.
+
+    Stage 3 is a return to the robot's level zero-degree configuration, so its
+    absolute continuous targets must not inherit stair-slope corrections.  The
+    relative offsets compensate the dimension-dependent final-approach pose.
+    """
+    outward = angles.outward_deg
+    transition = angles.transition_deg
+    rear_landing = 360.0 - 2.0 * outward + angles.rear_landing_correction_deg
+    preload = rear_landing + transition
+    generated_start = (
+        2.0 * 360.0 + outward + preload,
+        360.0 - outward + transition,
+        360.0 + outward + preload,
+        360.0 + outward + preload,
+    )
+    validated_targets = (
+        (1040.0, 320.0, 760.0, 760.0),
+        (1090.0, 370.0, 760.0, 760.0),
+        (1140.0, 320.0, 760.0, 760.0),
+        (1140.0, 320.0, 760.0, 1040.0),
+        (1140.0, 320.0, 1040.0, 1040.0),
+        (1080.0, 360.0, 1080.0, 1080.0),
+    )
+
+    def offset(target: tuple[float, float, float, float]) -> tuple[float, ...]:
+        return tuple(target[index] - generated_start[index] for index in range(4))
+
+    return (
+        CyclePoint(
+            2,
+            offset(validated_targets[0]),
+            hub_mode=(0, 0, 5, 5),
+        ),
+        CyclePoint(
+            3,
+            offset(validated_targets[1]),
+            hub_mode=(0, 0, 5, 5),
+        ),
+        CyclePoint(
+            4,
+            offset(validated_targets[2]),
+            hub_mode=(0, 0, 5, 5),
+        ),
+        CyclePoint(
+            7,
+            offset(validated_targets[3]),
+            hub_mode=(5, 5, 5, 0),
+            arm_phase=4,
+        ),
+        CyclePoint(
+            10,
+            offset(validated_targets[4]),
+            hub_mode=(5, 5, 0, 5),
+            arm_phase=3,
+        ),
+        CyclePoint(
+            12,
+            offset(validated_targets[5]),
+            hub_mode=MODE0,
+        ),
+    )
+
+
+def initial_front_clearance_m(center_to_first_riser_m: float) -> float:
+    """Return front-wheel leading-edge clearance in the outward start pose."""
+    front_pivot_from_center_m = BODY_LENGTH_M / 2.0 - PIVOT_OFFSET_M
+    wheel_center_from_pivot_m = LEG_LENGTH_M * math.sin(
+        math.radians(OUTWARD_ANGLE_DEG)
+    )
+    front_wheel_edge_from_center_m = (
+        front_pivot_from_center_m
+        + wheel_center_from_pivot_m
+        + WHEEL_RADIUS_M
+    )
+    return center_to_first_riser_m - front_wheel_edge_from_center_m
+
+
+def ideal_hub_speed_mps(hub_command: float) -> float:
+    """Convert the controller's 0.1-RPM hub command to ideal ground speed."""
+    rpm = abs(hub_command) * HUB_COMMAND_TO_RPM
+    return 2.0 * math.pi * WHEEL_RADIUS_M * rpm / 60.0
+
+
+def entry_approach_rise_correction_m(rise_m: float) -> float:
+    """
+    Return extra travel before the second FR lift for a taller stair.
+
+    Shorter-than-reference stairs retain the validated approach rather than
+    subtracting clearance from an open-loop gait.
+    """
+    return max(0.0, rise_m - VALIDATED_RISE_M) * ENTRY_APPROACH_RISE_GAIN
+
+
+def rear_landing_rise_correction_deg(rise_m: float) -> float:
+    """Return the taller-stair rear support correction in degrees."""
+    return (
+        max(0.0, rise_m - VALIDATED_RISE_M)
+        * REAR_LANDING_RISE_GAIN_DEG_PER_M
+    )
+
+
+def middle_fl_retreat_command(rise_m: float) -> float:
+    """Return the hub command used while FL transfers between upper treads."""
+    return round(
+        -max(0.0, rise_m - VALIDATED_RISE_M) * MIDDLE_FL_RETREAT_COMMAND_PER_M,
+        9,
+    )
+
+
+def geometric_lift_angle_deg(rise_m: float) -> float:
+    """Calculate the calibrated FR lift magnitude for a stair rise."""
+    pivot_y_m = WHEEL_RADIUS_M + LEG_LENGTH_M * math.cos(
+        math.radians(OUTWARD_ANGLE_DEG)
+    )
+
+    def raw_lift_angle(candidate_rise_m: float) -> float:
+        target_wheel_center_y_m = candidate_rise_m + WHEEL_RADIUS_M
+        cosine = (pivot_y_m - target_wheel_center_y_m) / LEG_LENGTH_M
+        cosine = max(-1.0, min(1.0, cosine))
+        return math.degrees(math.acos(cosine))
+
+    # The 2-D rigid geometry gives the minimum rim-clearance angle.  Preserve
+    # the additional clearance already validated by alex_v2 at a 0.10 m rise.
+    calibrated_clearance_deg = (
+        REFERENCE_LIFT_ANGLE_DEG - raw_lift_angle(VALIDATED_RISE_M)
+    )
+    return round(raw_lift_angle(rise_m) + calibrated_clearance_deg, 9)
+
+
+def geometric_transition_angle_deg(rise_m: float, run_m: float) -> float:
+    """Calculate the stair-slope transition angle with validated clearance."""
+    reference_slope_deg = math.degrees(
+        math.atan2(VALIDATED_RISE_M, VALIDATED_RUN_M)
+    )
+    transition_clearance_deg = REFERENCE_TRANSITION_ANGLE_DEG - reference_slope_deg
+    stair_slope_deg = math.degrees(math.atan2(rise_m, run_m))
+    return round(stair_slope_deg + transition_clearance_deg, 9)
+
+
+def calculate_geometry_angles(rise_m: float, run_m: float) -> GeometryAngles:
+    """Return the independent angles used to construct all hip targets."""
+    return GeometryAngles(
+        outward_deg=OUTWARD_ANGLE_DEG,
+        lift_deg=geometric_lift_angle_deg(rise_m),
+        transition_deg=geometric_transition_angle_deg(rise_m, run_m),
+        rear_landing_correction_deg=rear_landing_rise_correction_deg(rise_m),
+        middle_fl_retreat_command=middle_fl_retreat_command(rise_m),
+    )
+
+
+def _is_uniform_hub_only_segment(previous: GaitRow, current: GaitRow) -> bool:
+    speeds = current.hub_velocity
+    return (
+        current.hips == previous.hips
+        and all(abs(speed) > 0.0 for speed in speeds)
+        and max(speeds) - min(speeds) == 0.0
+    )
+
+
+def _retime_hub_only_segments(
+    rows: Sequence[GaitRow],
+    rise_m: float,
+    run_m: float,
+    center_to_first_riser_m: float,
+    drive_scale: float,
+) -> list[GaitRow]:
+    """Calculate hub-only durations from desired distance and wheel speed."""
+    if len(rows) < 2:
+        return list(rows)
+
+    reference_clearance_m = initial_front_clearance_m(
+        VALIDATED_CENTER_TO_FIRST_RISER_M
+    )
+    reference_initial_drive_m = ideal_hub_speed_mps(125.0) * 2.0
+    first_riser_reserve_m = reference_clearance_m - reference_initial_drive_m
+    requested_initial_drive_m = (
+        initial_front_clearance_m(center_to_first_riser_m) - first_riser_reserve_m
+    )
+    if requested_initial_drive_m <= 0.0:
         raise ValueError(
-            "only the validated 0.35 m rise / 0.10 m run template is currently "
-            "supported; arbitrary dimensions require the future geometry solver"
+            "center-to-first-riser distance leaves no positive initial hub approach"
+        )
+
+    result = [rows[0]]
+    hub_only_segment_index = 0
+    for previous, current in zip(rows[:-1], rows[1:]):
+        duration_sec = current.time - previous.time
+        if _is_uniform_hub_only_segment(previous, current):
+            command = current.hub_velocity[0]
+            ideal_speed_mps = ideal_hub_speed_mps(command)
+            if hub_only_segment_index == 0:
+                desired_distance_m = requested_initial_drive_m
+            else:
+                reference_distance_m = ideal_speed_mps * duration_sec
+                desired_distance_m = reference_distance_m * run_m / VALIDATED_RUN_M
+                # Segment 1 is the entry hub motion at reference t=15--16,
+                # after both front wheels have crossed the first riser and
+                # immediately before FR lifts toward the second tread.  Put
+                # the observed rise-dependent setback here; adding it to the
+                # initial drive could push the still-grounded FL into riser 1.
+                if hub_only_segment_index == 1:
+                    desired_distance_m += entry_approach_rise_correction_m(rise_m)
+            duration_sec = desired_distance_m / (ideal_speed_mps * drive_scale)
+            hub_only_segment_index += 1
+        new_time = round(result[-1].time + duration_sec, 9)
+        result.append(replace(current, time=new_time))
+    return result
+
+
+def validate_dimensions(
+    rise_m: float,
+    run_m: float,
+    center_to_first_riser_m: float = VALIDATED_CENTER_TO_FIRST_RISER_M,
+    drive_scale: float = 1.0,
+) -> None:
+    values = (rise_m, run_m, center_to_first_riser_m, drive_scale)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("stair dimensions and approach distance must be finite")
+    if any(value <= 0.0 for value in values):
+        raise ValueError(
+            "stair dimensions, approach distance, and drive scale must be positive"
+        )
+    clearance_m = initial_front_clearance_m(center_to_first_riser_m)
+    if clearance_m <= 0.0:
+        raise ValueError("the outward front wheel intersects the first riser")
+    lift_angle_deg = geometric_lift_angle_deg(rise_m)
+    if lift_angle_deg > 180.0:
+        raise ValueError(
+            "stair rise plus the calibrated lift clearance exceeds leg reach"
+        )
+    transition_angle_deg = geometric_transition_angle_deg(rise_m, run_m)
+    if transition_angle_deg >= OUTWARD_ANGLE_DEG:
+        raise ValueError(
+            "stair slope requires a transition angle outside the validated "
+            "outward-leg geometry"
         )
 
 
-def append_climb_cycle(rows: list[GaitRow], cycle_index: int) -> None:
+def append_climb_cycle(
+    rows: list[GaitRow],
+    entry_rows: Sequence[GaitRow],
+    climb_cycle: Sequence[CyclePoint],
+    cycle_index: int,
+) -> None:
     if not rows:
         raise ValueError("entry rows must be present before appending a climb cycle")
     if cycle_index < 0:
         raise ValueError("cycle index cannot be negative")
 
-    start_time = ENTRY_ROWS[-1].time + cycle_index * CYCLE_DURATION_SEC
+    start_time = entry_rows[-1].time + cycle_index * CYCLE_DURATION_SEC
     base = tuple(
-        ENTRY_ROWS[-1].hips[leg] + 360.0 * cycle_index for leg in range(4)
+        entry_rows[-1].hips[leg] + 360.0 * cycle_index for leg in range(4)
     )
-    for point in CLIMB_CYCLE:
+    for point in climb_cycle:
         hips = tuple(base[leg] + point.hip_offset[leg] for leg in range(4))
         rows.append(
             _row(
@@ -213,28 +493,42 @@ def _append_relative_template(
         )
 
 
-def append_stage3(rows: list[GaitRow]) -> None:
-    _append_relative_template(rows, FINAL_APPROACH)
-    _append_relative_template(rows, STAGE3)
+def append_stage3(
+    rows: list[GaitRow],
+    final_approach: Sequence[CyclePoint],
+    stage3: Sequence[CyclePoint],
+) -> None:
+    _append_relative_template(rows, final_approach)
+    _append_relative_template(rows, stage3)
 
 
 def generate_gait(
     rise_m: float = VALIDATED_RISE_M,
     run_m: float = VALIDATED_RUN_M,
+    center_to_first_riser_m: float = VALIDATED_CENTER_TO_FIRST_RISER_M,
     middle_cycles: int = 1,
     include_stage3: bool = False,
+    drive_scale: float = 1.0,
 ) -> list[GaitRow]:
-    validate_dimensions(rise_m, run_m)
+    validate_dimensions(rise_m, run_m, center_to_first_riser_m, drive_scale)
     if isinstance(middle_cycles, bool) or not isinstance(middle_cycles, int):
         raise ValueError("middle cycle count must be an integer")
     if middle_cycles < 1:
         raise ValueError("middle cycle count must be at least one")
 
-    rows = list(ENTRY_ROWS)
+    angles = calculate_geometry_angles(rise_m, run_m)
+    entry_rows = build_entry_rows(angles)
+    climb_cycle = build_climb_cycle(angles)
+    rows = list(entry_rows)
     for cycle_index in range(middle_cycles):
-        append_climb_cycle(rows, cycle_index)
+        append_climb_cycle(rows, entry_rows, climb_cycle, cycle_index)
     if include_stage3:
-        append_stage3(rows)
+        append_stage3(
+            rows, build_final_approach(angles), build_stage3(angles)
+        )
+    rows = _retime_hub_only_segments(
+        rows, rise_m, run_m, center_to_first_riser_m, drive_scale
+    )
     validate_gait(rows)
     return rows
 
@@ -286,12 +580,24 @@ def write_csv(rows: Iterable[GaitRow], output_path: Path, force: bool = False) -
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate a Kilin stair CSV. The current version only supports the "
-            "validated 0.35 m rise / 0.10 m run template."
+            "Generate a geometry-scaled Kilin stair CSV from the validated "
+            "phase sequence."
         )
     )
     parser.add_argument("--rise", type=float, default=VALIDATED_RISE_M, help="stair rise in m")
     parser.add_argument("--run", type=float, default=VALIDATED_RUN_M, help="stair run in m")
+    parser.add_argument(
+        "--center-to-first-riser",
+        type=float,
+        default=VALIDATED_CENTER_TO_FIRST_RISER_M,
+        help="initial robot-center distance to the first stair riser in m",
+    )
+    parser.add_argument(
+        "--drive-scale",
+        type=float,
+        default=1.0,
+        help="actual/ideal hub travel ratio used to compensate wheel slip",
+    )
     parser.add_argument(
         "--middle-cycles",
         type=int,
@@ -312,11 +618,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         rows = generate_gait(
-            args.rise, args.run, args.middle_cycles, args.include_stage3
+            args.rise,
+            args.run,
+            args.center_to_first_riser,
+            args.middle_cycles,
+            args.include_stage3,
+            args.drive_scale,
         )
         write_csv(rows, args.output, args.force)
     except (ValueError, OSError) as error:
         raise SystemExit(f"error: {error}") from error
+    angles = calculate_geometry_angles(args.rise, args.run)
+    clearance_mm = initial_front_clearance_m(args.center_to_first_riser) * 1000.0
+    entry_correction_mm = entry_approach_rise_correction_m(args.rise) * 1000.0
+    print(
+        "geometry: "
+        f"outward={angles.outward_deg:.3f} deg, "
+        f"lift={angles.lift_deg:.3f} deg, "
+        f"transition={angles.transition_deg:.3f} deg, "
+        f"rear_landing_correction={angles.rear_landing_correction_deg:.3f} deg, "
+        f"middle_fl_retreat={angles.middle_fl_retreat_command:.3f}, "
+        f"initial_clearance={clearance_mm:.3f} mm, "
+        f"entry_approach_correction={entry_correction_mm:.3f} mm"
+    )
     print(f"wrote {len(rows)} gait rows to {args.output.expanduser().resolve()}")
     return 0
 

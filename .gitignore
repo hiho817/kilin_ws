@@ -4,5 +4,6 @@ build/
 log/
 .vscode/
 logs/
+rosbags/
 csv/
 config/
