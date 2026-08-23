@@ -15,6 +15,7 @@ def generate_launch_description():
     use_speed_command = LaunchConfiguration("use_speed_command")
     run_duration_s = LaunchConfiguration("run_duration_s")
     hard_motion_limit_s = LaunchConfiguration("hard_motion_limit_s")
+    auto_initialize_stance = LaunchConfiguration("auto_initialize_stance")
     terrain_profile = LaunchConfiguration("terrain_profile")
     config = PathJoinSubstitution(
         [FindPackageShare("kilin_known_terrain_controller"), "config", "one_sided_ramp.yaml"]
@@ -55,6 +56,7 @@ def generate_launch_description():
                 "use_speed_command": use_speed_command,
                 "run_duration_s": run_duration_s,
                 "hard_motion_limit_s": hard_motion_limit_s,
+                "known_ramp.auto_initialize_stance": auto_initialize_stance,
             },
         ],
         remappings=[("/clock", "/kilin/isaac/clock")],
@@ -79,6 +81,7 @@ def generate_launch_description():
                 "use_speed_command": use_speed_command,
                 "run_duration_s": run_duration_s,
                 "hard_motion_limit_s": hard_motion_limit_s,
+                "known_ramp.auto_initialize_stance": auto_initialize_stance,
             },
         ],
         condition=IfCondition(PythonExpression(["'", target, "' == 'real'"])),
@@ -123,6 +126,14 @@ def generate_launch_description():
                 "hard_motion_limit_s",
                 default_value="22.0",
                 description="Upper duration bound for fixed-speed runs",
+            ),
+            DeclareLaunchArgument(
+                "auto_initialize_stance",
+                default_value="true",
+                description=(
+                    "Move to the nominal [-45, -45, 45, 45] degree stance "
+                    "before known_ramp; set false when already in that pose"
+                ),
             ),
             DeclareLaunchArgument(
                 "terrain_profile",

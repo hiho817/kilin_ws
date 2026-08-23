@@ -135,8 +135,9 @@ class RecedingHorizonPlanner:
             from scipy.optimize import minimize as _  # noqa: F401
         except ImportError as exc:  # pragma: no cover - environment dependent
             raise RuntimeError(
-                "SciPy is required. Install this package with `python -m pip "
-                "install -e planning`."
+                "SciPy with a compatible NumPy is required. On Ubuntu/ROS, install "
+                "python3-numpy and python3-scipy; remove or downgrade any user-site "
+                "NumPy that shadows the system version."
             ) from exc
 
     def _unpack(self, decision: ArrayLike, steps: int) -> tuple[FloatArray, ...]:
