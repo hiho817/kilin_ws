@@ -62,18 +62,21 @@ void motor_cmd_cb(const motor_msg::MotorCmdStamped cmd) {
         hip->set_position(cmd_i->hip().position());
         hip->set_velocity(0.0);               
         hip->set_torque(cmd_i->hip().torque());
+        hip->set_position_diff(0.0);
 
         // steering
         auto* steering = st_i->mutable_steering();
         steering->set_position(cmd_i->steering().position());
         steering->set_velocity(0.0);
         steering->set_torque(cmd_i->steering().torque());
+        steering->set_position_diff(0.0);
 
         // hub
         auto* hub = st_i->mutable_hub();
         hub->set_position(cmd_i->hub().position());
         hub->set_velocity(0.0);
         hub->set_torque(cmd_i->hub().torque());
+        hub->set_position_diff(0.0);
     }
 
     // Get current time and update header (using 'time' field)

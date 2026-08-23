@@ -2,6 +2,7 @@
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/u_int8.hpp"
 #include "std_msgs/msg/float64.hpp"
+#include "std_msgs/msg/float64_multi_array.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "kilin_msgs/msg/motor_cmd_stamped.hpp"
 #include "kilin_msgs/msg/leg_cmd.hpp"
@@ -13,6 +14,7 @@
 #include <thread>
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 
 struct ModulePos {
     double Xi;
@@ -65,10 +67,19 @@ public:
         prev_steering_angle["C"] = 0.0;
         prev_steering_angle["D"] = 0.0;
 
+        hip_positions_["A"] = 0.0;
+        hip_positions_["B"] = 0.0;
+        hip_positions_["C"] = 0.0;
+        hip_positions_["D"] = 0.0;
+
         // ROS interfaces
         sub_cmdvel = create_subscription<geometry_msgs::msg::Twist>(
             "/kilin/cmd_vel", 10,
             std::bind(&KilinCmdConverter::cmdVelCallback, this, std::placeholders::_1));
+
+        sub_hip_position = create_subscription<std_msgs::msg::Float64MultiArray>(
+            "/kilin/hip_cmd_position", 10,
+            std::bind(&KilinCmdConverter::hipPositionCallback, this, std::placeholders::_1));
 
         // Brake request (from kilin_joystick)
         sub_brake = create_subscription<std_msgs::msg::Bool>(
@@ -148,6 +159,25 @@ private:
 
     void hipTorqueCallback(const std_msgs::msg::Float64::SharedPtr msg) {
         hip_torque.store(msg->data, std::memory_order_relaxed);
+    }
+
+    // Four position targets in the shared module order A/B/C/D = FL/FR/RL/RR.
+    void hipPositionCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
+        if (msg->data.size() != 4) {
+            RCLCPP_WARN(get_logger(), "Hip position command has %zu values; expected 4", msg->data.size());
+            return;
+        }
+        if (!std::all_of(msg->data.begin(), msg->data.end(),
+                         [](double value) { return std::isfinite(value); })) {
+            RCLCPP_WARN(get_logger(), "Hip position command contains a non-finite value");
+            return;
+        }
+        std::lock_guard<std::mutex> lock(hip_position_mutex_);
+        hip_positions_["A"] = msg->data[0];
+        hip_positions_["B"] = msg->data[1];
+        hip_positions_["C"] = msg->data[2];
+        hip_positions_["D"] = msg->data[3];
+        hip_position_command_received_.store(true, std::memory_order_release);
     }
 
     // ============================================================
@@ -415,6 +445,13 @@ private:
             if (hip_enabled) {
                 hip.motor_mode = TORQUE_MODE;
                 hip.torque = (float)hip_torque.load(std::memory_order_relaxed);
+            } else if (hip_position_command_received_.load(std::memory_order_acquire)) {
+                std::lock_guard<std::mutex> lock(hip_position_mutex_);
+                hip.motor_mode = POSITION_MODE;
+                hip.position = hip_positions_[key];
+                hip.kp = 350.0;
+                hip.ki = 0.0;
+                hip.kd = 5.0;
             } else {
                 hip.motor_mode = HIP_REST_MODE;
             }
@@ -496,6 +533,12 @@ private:
     std::atomic<uint8_t> hip_mask{0};
     std::atomic<double> hip_torque{0.0};
 
+    // Position commands are intentionally inactive until their first valid
+    // message, preserving the upstream default of hips at rest on startup.
+    std::atomic<bool> hip_position_command_received_{false};
+    std::map<std::string, double> hip_positions_;
+    std::mutex hip_position_mutex_;
+
     // vy gating
     double e_full, e_stop, g_min;
     double dg_down, dg_up;
@@ -513,6 +556,7 @@ private:
     rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr sub_rest_mask;
     rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr sub_hip_mask;
     rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr sub_hip_torque;
+    rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr sub_hip_position;
     rclcpp::Publisher<kilin_msgs::msg::MotorCmdStamped>::SharedPtr pub_motor;
 
     static KilinCmdConverter *instance_;

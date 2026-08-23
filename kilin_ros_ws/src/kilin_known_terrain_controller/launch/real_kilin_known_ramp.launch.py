@@ -1,0 +1,48 @@
+"""Known-ramp controller for real Kilin: no Isaac bridge or simulation clock."""
+
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
+
+
+def generate_launch_description():
+    config_dir = [FindPackageShare("kilin_known_terrain_controller"), "config"]
+    base_config = PathJoinSubstitution([*config_dir, "one_sided_ramp.yaml"])
+    terrain_config = PathJoinSubstitution([*config_dir, LaunchConfiguration("terrain_profile")])
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument("armed", default_value="false"),
+            DeclareLaunchArgument("mode", default_value="known_ramp"),
+            DeclareLaunchArgument("terrain_profile", default_value="terrain_150mm_20deg_single.yaml"),
+            DeclareLaunchArgument("use_speed_command", default_value="false"),
+            DeclareLaunchArgument("speed_m_s", default_value="0.05"),
+            DeclareLaunchArgument("run_duration_s", default_value="30.0"),
+            DeclareLaunchArgument("hard_motion_limit_s", default_value="35.0"),
+            Node(
+                package="kilin_known_terrain_controller",
+                executable="known_terrain_controller",
+                name="kilin_known_terrain_controller",
+                output="screen",
+                parameters=[
+                    base_config,
+                    terrain_config,
+                    {
+                        "use_sim_time": False,
+                        "armed": LaunchConfiguration("armed"),
+                        "mode": LaunchConfiguration("mode"),
+                        "command_topic": "/motor/command",
+                        "feedback_source": "motor_state",
+                        "motor_state_topic": "/motor/state",
+                        "use_odometry": False,
+                        "use_terrain_window": False,
+                        "use_speed_command": LaunchConfiguration("use_speed_command"),
+                        "speed_m_s": LaunchConfiguration("speed_m_s"),
+                        "run_duration_s": LaunchConfiguration("run_duration_s"),
+                        "hard_motion_limit_s": LaunchConfiguration("hard_motion_limit_s"),
+                    },
+                ],
+            ),
+        ]
+    )

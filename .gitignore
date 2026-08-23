@@ -7,3 +7,5 @@ logs/
 rosbags/
 csv/
 config/
+.pyc
+__pycache__/

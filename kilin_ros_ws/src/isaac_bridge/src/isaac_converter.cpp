@@ -3,7 +3,9 @@
 #include <kilin_msgs/msg/motor_cmd_stamped.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <kilin_msgs/msg/motor_state_stamped.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 #include <string>
@@ -54,6 +56,11 @@ public:
         pub_position_cmd_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
             "/isaac/position_cmd", 10);
 
+        // Isaac JointState is translated back into the same feedback contract
+        // exposed by the real Kilin ROS bridge.
+        pub_motor_state_ = this->create_publisher<kilin_msgs::msg::MotorStateStamped>(
+            "/motor/state", 10);
+
         // 4. 訂閱 Isaac Sim 回傳的感測器資料
         sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
             "/imu", 10,
@@ -85,6 +92,7 @@ public:
         RCLCPP_INFO(this->get_logger(), "Publishing to /isaac/wheel_velocity_cmd (4 wheels - VELOCITY)");
         RCLCPP_INFO(this->get_logger(), "Publishing to /isaac/position_cmd (8 joints: hip + steering - POSITION)");
         RCLCPP_INFO(this->get_logger(), "Subscribing to /imu and /kilin_joint_states");
+        RCLCPP_INFO(this->get_logger(), "Publishing simulated feedback on /motor/state");
     }
 
     ~IsaacConverter() {
@@ -282,11 +290,69 @@ private:
         last_joint_efforts_ = msg->effort;
         joint_state_received_ = true;
 
+        publish_motor_state_(*msg);
+
         if (!msg->position.empty()) {
             RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                 "JointState Received: %zu joints. First joint [%s] pos: %.2f",
                 msg->name.size(), msg->name[0].c_str(), msg->position[0]);
         }
+    }
+
+    void publish_motor_state_(const sensor_msgs::msg::JointState& joint_state) {
+        const auto position_for = [&joint_state](const std::string& name, double& value) {
+            const auto found = std::find(joint_state.name.begin(), joint_state.name.end(), name);
+            if (found == joint_state.name.end()) {
+                return false;
+            }
+            const auto index = static_cast<std::size_t>(std::distance(joint_state.name.begin(), found));
+            if (index >= joint_state.position.size()) {
+                return false;
+            }
+            value = joint_state.position[index];
+            return std::isfinite(value);
+        };
+
+        double fl_hip = 0.0;
+        double fr_hip = 0.0;
+        double rl_hip = 0.0;
+        double rr_hip = 0.0;
+        if (!position_for("FL_hip", fl_hip) || !position_for("FR_hip", fr_hip) ||
+            !position_for("RL_hip", rl_hip) || !position_for("RR_hip", rr_hip)) {
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(), *this->get_clock(), 1000,
+                "JointState lacks one or more required hip names; not publishing /motor/state");
+            return;
+        }
+
+        kilin_msgs::msg::MotorStateStamped state;
+        state.header.seq = static_cast<int32_t>(++motor_state_seq_);
+        const auto now_ns = this->get_clock()->now().nanoseconds();
+        state.header.time.sec = static_cast<int32_t>(now_ns / 1000000000LL);
+        state.header.time.nanosec = static_cast<uint32_t>(now_ns % 1000000000LL);
+        state.header.frame_id = "isaac_sim";
+        // The shared module convention is A/B/C/D = FL/FR/RL/RR.
+        state.module_a.hip.position = fl_hip;
+        state.module_b.hip.position = fr_hip;
+        state.module_c.hip.position = rl_hip;
+        state.module_d.hip.position = rr_hip;
+        // position_diff is measured by the physical low-level motor system for
+        // backlash monitoring. Isaac has no corresponding model, so its ideal
+        // articulation feedback explicitly reports zero rather than inventing
+        // a command-tracking error with different semantics.
+        state.module_a.hip.position_diff = 0.0;
+        state.module_b.hip.position_diff = 0.0;
+        state.module_c.hip.position_diff = 0.0;
+        state.module_d.hip.position_diff = 0.0;
+        state.module_a.steering.position_diff = 0.0;
+        state.module_b.steering.position_diff = 0.0;
+        state.module_c.steering.position_diff = 0.0;
+        state.module_d.steering.position_diff = 0.0;
+        state.module_a.hub.position_diff = 0.0;
+        state.module_b.hub.position_diff = 0.0;
+        state.module_c.hub.position_diff = 0.0;
+        state.module_d.hub.position_diff = 0.0;
+        pub_motor_state_->publish(state);
     }
 
     // Wrap angle to [-π, π]
@@ -372,6 +438,7 @@ private:
     rclcpp::Subscription<kilin_msgs::msg::MotorCmdStamped>::SharedPtr sub_motor_cmd_;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_wheel_velocity_;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_position_cmd_;
+    rclcpp::Publisher<kilin_msgs::msg::MotorStateStamped>::SharedPtr pub_motor_state_;
     
     // Sensor subscribers
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
@@ -396,6 +463,7 @@ private:
     bool csv_closed_ = false;
     uint64_t log_count_ = 0;
     uint64_t log_seq_ = 0;
+    uint64_t motor_state_seq_ = 0;
 
     // IMU data cache
     bool imu_received_ = false;

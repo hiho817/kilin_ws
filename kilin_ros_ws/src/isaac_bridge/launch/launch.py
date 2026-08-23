@@ -8,12 +8,16 @@ Usage:
   
   Enable logging with custom filename:
     ros2 launch isaac_bridge launch.py csv_name:=my_experiment.csv
+
+  Use an external motor-command controller:
+    ros2 launch isaac_bridge launch.py start_cmd_converter:=false
     
   CSV will be saved to: kilin_ws/logs/YYYY-MM-DD/<csv_name>
 """
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
@@ -39,6 +43,12 @@ def generate_launch_description():
         'flush_every_n',
         default_value='20',
         description='Flush CSV every N rows (0 = every row)'
+    )
+
+    start_cmd_converter_arg = DeclareLaunchArgument(
+        'start_cmd_converter',
+        default_value='true',
+        description='Start kilin_cmd_converter (disable when another node publishes motor commands)'
     )
 
     # Isaac Bridge Node - 將 kilin motor commands 轉換為 Isaac Sim commands
@@ -67,6 +77,7 @@ def generate_launch_description():
         name='kilin_cmd_converter',
         output='screen',
         emulate_tty=True,
+        condition=IfCondition(LaunchConfiguration('start_cmd_converter')),
         parameters=[],
         remappings=[]
     )
@@ -76,6 +87,7 @@ def generate_launch_description():
         csv_name_arg,
         add_suffix_arg,
         flush_every_n_arg,
+        start_cmd_converter_arg,
         # Nodes
         isaac_converter_node,
         kilin_cmd_converter_node,

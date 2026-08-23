@@ -26,6 +26,7 @@ set(msg_files
   "msg/BalanceStateStamped.msg"
   "msg/StairPhaseStamped.msg"
   "msg/StabilityStateStamped.msg"
+  "msg/TerrainWindow.msg"
 )
 
 # Generate the message interfaces

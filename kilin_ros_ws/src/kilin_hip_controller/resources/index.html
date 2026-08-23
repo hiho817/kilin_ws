@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kilin Hip Controller</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Hip Position Controller</h1>
+        <p class="subtitle">Control the 4 hip positions in real-time</p>
+        
+        <div class="knobs-grid">
+            <!-- FL Hip - Top Left, facing left, CW positive -->
+            <div class="knob-container">
+                <h3>FL Hip</h3>
+                <canvas id="knob-fl" class="knob-canvas" width="200" height="200"></canvas>
+                <div class="value-display">
+                    <input type="number" id="value-fl" min="-3.14" max="3.14" step="0.01" value="0.00">
+                    <span class="unit">rad</span>
+                </div>
+            </div>
+
+            <!-- FR Hip - Top Right, facing right, CCW positive -->
+            <div class="knob-container">
+                <h3>FR Hip</h3>
+                <canvas id="knob-fr" class="knob-canvas" width="200" height="200"></canvas>
+                <div class="value-display">
+                    <input type="number" id="value-fr" min="-3.14" max="3.14" step="0.01" value="0.00">
+                    <span class="unit">rad</span>
+                </div>
+            </div>
+
+            <!-- RL Hip - Bottom Left, facing left, CCW positive -->
+            <div class="knob-container">
+                <h3>RL Hip</h3>
+                <canvas id="knob-rl" class="knob-canvas" width="200" height="200"></canvas>
+                <div class="value-display">
+                    <input type="number" id="value-rl" min="-3.14" max="3.14" step="0.01" value="0.00">
+                    <span class="unit">rad</span>
+                </div>
+            </div>
+
+            <!-- RR Hip - Bottom Right, facing right, CW positive -->
+            <div class="knob-container">
+                <h3>RR Hip</h3>
+                <canvas id="knob-rr" class="knob-canvas" width="200" height="200"></canvas>
+                <div class="value-display">
+                    <input type="number" id="value-rr" min="-3.14" max="3.14" step="0.01" value="0.00">
+                    <span class="unit">rad</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="control-panel">
+            <button id="reset-btn" class="button">Reset All</button>
+            <button id="home-btn" class="button">Home Position</button>
+            <div class="status">
+                <p>Status: <span id="status" class="status-text">Ready</span></p>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
