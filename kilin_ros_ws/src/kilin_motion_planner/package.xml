@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>kilin_motion_planner</name>
+  <version>0.1.0</version>
+  <description>Runtime motion-planning library used by Kilin ROS controllers.</description>
+  <maintainer email="kuojack0114@gmail.com">biorola</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>python3-numpy</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

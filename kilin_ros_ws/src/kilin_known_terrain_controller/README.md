@@ -5,6 +5,14 @@ against two parameterized, already-known one-sided ramps on opposite wheel
 tracks. It does not replay CSV
 commands and does not use live terrain-map feedback.
 
+`kilin_motion_planner` is an explicit ROS workspace dependency. After pulling
+changes, build both packages before launching; no planner checkout under a
+user-specific `Documents` path is required.
+
+```bash
+colcon build --packages-select kilin_motion_planner kilin_known_terrain_controller
+```
+
 For `target:=isaac`, the node publishes complete A/B/C/D motor commands to
 `/kilin/motor_cmd_raw`; `isaac_bridge` maps them to the Isaac Sim action graph.
 For `target:=real`, it publishes directly to `/motor/command` and reads

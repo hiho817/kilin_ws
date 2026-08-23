@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from threading import Lock, Thread
 
 import numpy as np
@@ -157,7 +155,6 @@ class KnownTerrainController(Node):
     def _declare_parameters(self) -> None:
         defaults = {
             "mode": "disabled",
-            "planner_source_path": "/home/r14522829/Documents/biorola_jack_linux/planning/src",
             "command_topic": "/kilin/motor_cmd_raw",
             "feedback_source": "motor_state",
             "motor_state_topic": "/motor/state",
@@ -237,10 +234,6 @@ class KnownTerrainController(Node):
             self.declare_parameter(name, value)
 
     def _load_planner(self) -> None:
-        source = Path(str(self.get_parameter("planner_source_path").value)).expanduser()
-        if not (source / "kilin_motion_planner").is_dir():
-            raise RuntimeError(f"Planner source not found at {source}")
-        sys.path.insert(0, str(source))
         from kilin_motion_planner.config import PlannerConfig
         from kilin_motion_planner.live_terrain import ElevationWindow, regular_grid_coordinates
         from kilin_motion_planner.online import LivePlannerConfig, RecedingHorizonSession
