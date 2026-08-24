@@ -9,6 +9,10 @@ commands and does not use live terrain-map feedback.
 changes, build both packages before launching; no planner checkout under a
 user-specific `Documents` path is required.
 
+The planner requires the Ubuntu ROS packages `python3-numpy` and
+`python3-scipy`. Their versions must be compatible; a user-installed NumPy 2.x
+can shadow Ubuntu's older NumPy and break the system SciPy package.
+
 ```bash
 colcon build --packages-select kilin_motion_planner kilin_known_terrain_controller
 ```
@@ -73,6 +77,10 @@ Planning and publication require fresh named hip feedback, and hubs use REST
 mode before and after active motion. Planner hip angles are sent directly to Isaac, with applied hip
 motion limited to the measured actuator limit of 0.4 revolutions/s
 (144 degrees/s), matching the Version 2 planner constraint.
+
+If the robot is already in that exact nominal stance, skip the transition with
+`auto_initialize_stance:=false` in the launch command. Fresh hip feedback is
+still required; this option only skips the commanded repositioning step.
 
 `mode:=planner_posture_test` uses that same planner and direct hip mapping at a
 stationary flat-ground position for four seconds. All hub motors remain in REST
