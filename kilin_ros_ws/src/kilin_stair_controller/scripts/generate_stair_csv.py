@@ -38,9 +38,25 @@ PIVOT_OFFSET_M = 0.0375
 LEG_LENGTH_M = 0.255
 WHEEL_RADIUS_M = 0.0525
 OUTWARD_ANGLE_DEG = 40.0
-REFERENCE_LIFT_ANGLE_DEG = 90.0
+# alex_v2 used 90 degrees as a deliberately conservative swing pose, not as a
+# measured just-clears-the-riser angle.  Keep that pose until geometry says the
+# wheel rim would no longer clear the tread.
+MINIMUM_LIFT_ANGLE_DEG = 90.0
+LIFT_CLEARANCE_M = 0.010
 REFERENCE_TRANSITION_ANGLE_DEG = 20.0
+# Successful 0.10/0.35 and 0.12/0.35 runs had about 10--11.5 degrees between
+# the front and rear hip stances before the long FR swing.  The generated
+# stance uses half the transition angle for that separation, so clamp the
+# transition to twice this empirical minimum.
+MINIMUM_FRONT_REAR_STANCE_SEPARATION_DEG = 10.0
 HUB_COMMAND_TO_RPM = 0.1
+
+# Rise-dependent corrections below are experimental calibrations, not robot
+# geometry.  They have only been validated through the successful 0.12/0.35
+# gait, so do not extrapolate them beyond that rise.
+MAX_CALIBRATED_CORRECTION_RISE_M = 0.12
+MAX_CALIBRATED_ENTRY_RUN_M = 0.40
+SHORT_RUN_CORRECTION_START_M = 0.35
 
 # Open-loop entry calibration from the 0.12 m-rise / 0.35 m-run rosbag.  At the
 # second FR swing, the wheel center was 0.056 m behind the successful 0.10 m
@@ -48,6 +64,23 @@ HUB_COMMAND_TO_RPM = 0.1
 # before the second FR lift.  Keeping this as an explicit gain makes the
 # calibration auditable and preserves the validated 0.10 m CSV byte-for-byte.
 ENTRY_APPROACH_RISE_GAIN = 2.8
+
+# In the 0.08/0.40 rosbag the second FR wheel center settled 36 mm before the
+# second riser, leaving only 16 mm of wheel overlap.  A 20 mm wheel-center
+# landing reserve requires about 56 mm more travel.  Apply that correction to
+# the entry approach (the same safe segment used by the rise correction), and
+# scale it from the validated 0.35 m run through the measured 0.40 m run.
+# Shorter runs keep their existing open-loop clearance, and longer runs are
+# capped until they are measured rather than extrapolating this calibration.
+ENTRY_APPROACH_RUN_GAIN = 1.1
+
+# Correct-dimension 0.11/0.33 log02 showed only 11 mm of FR reserve on tread 2;
+# the following hub drive was blocked at the edge, leaving RR 66--79 mm short
+# of tread 1.  Add up to 15 mm while FR is fully lifted (the hub=125 segment),
+# interpolating below the successful 0.35 m baseline and capping at 0.33 m.
+# The existing 0.12/0.30 correction remains at the same 15 mm cap.
+SHORT_RUN_FR_LANDING_GAIN = 0.75
+MAX_SHORT_RUN_FR_LANDING_CORRECTION_M = 0.015
 
 # In the same 0.12/0.35 test, phase 3 reached only 13.86 mm at full arm
 # extension because the RR--FL support edge was about 1.14 mm too close to the
@@ -290,6 +323,12 @@ def ideal_hub_speed_mps(hub_command: float) -> float:
     return 2.0 * math.pi * WHEEL_RADIUS_M * rpm / 60.0
 
 
+def calibrated_rise_excess_m(rise_m: float) -> float:
+    """Return the rise excess covered by measured 0.10--0.12 m calibrations."""
+    capped_rise_m = min(rise_m, MAX_CALIBRATED_CORRECTION_RISE_M)
+    return max(0.0, capped_rise_m - VALIDATED_RISE_M)
+
+
 def entry_approach_rise_correction_m(rise_m: float) -> float:
     """
     Return extra travel before the second FR lift for a taller stair.
@@ -297,53 +336,58 @@ def entry_approach_rise_correction_m(rise_m: float) -> float:
     Shorter-than-reference stairs retain the validated approach rather than
     subtracting clearance from an open-loop gait.
     """
-    return max(0.0, rise_m - VALIDATED_RISE_M) * ENTRY_APPROACH_RISE_GAIN
+    return calibrated_rise_excess_m(rise_m) * ENTRY_APPROACH_RISE_GAIN
+
+
+def entry_approach_run_correction_m(run_m: float) -> float:
+    """Return measured extra entry travel for a deeper-than-reference tread."""
+    capped_run_m = min(run_m, MAX_CALIBRATED_ENTRY_RUN_M)
+    return max(0.0, capped_run_m - VALIDATED_RUN_M) * ENTRY_APPROACH_RUN_GAIN
+
+
+def short_run_fr_landing_correction_m(run_m: float) -> float:
+    """Return capped fully-lifted FR travel for a shorter-than-0.35 m tread."""
+    run_deficit_m = max(0.0, SHORT_RUN_CORRECTION_START_M - run_m)
+    correction_m = run_deficit_m * SHORT_RUN_FR_LANDING_GAIN
+    return min(correction_m, MAX_SHORT_RUN_FR_LANDING_CORRECTION_M)
 
 
 def rear_landing_rise_correction_deg(rise_m: float) -> float:
     """Return the taller-stair rear support correction in degrees."""
-    return (
-        max(0.0, rise_m - VALIDATED_RISE_M)
-        * REAR_LANDING_RISE_GAIN_DEG_PER_M
-    )
+    return calibrated_rise_excess_m(rise_m) * REAR_LANDING_RISE_GAIN_DEG_PER_M
 
 
 def middle_fl_retreat_command(rise_m: float) -> float:
     """Return the hub command used while FL transfers between upper treads."""
     return round(
-        -max(0.0, rise_m - VALIDATED_RISE_M) * MIDDLE_FL_RETREAT_COMMAND_PER_M,
+        -calibrated_rise_excess_m(rise_m) * MIDDLE_FL_RETREAT_COMMAND_PER_M,
         9,
     )
 
 
 def geometric_lift_angle_deg(rise_m: float) -> float:
-    """Calculate the calibrated FR lift magnitude for a stair rise."""
+    """Return 90 degrees unless tread clearance requires a larger lift."""
     pivot_y_m = WHEEL_RADIUS_M + LEG_LENGTH_M * math.cos(
         math.radians(OUTWARD_ANGLE_DEG)
     )
-
-    def raw_lift_angle(candidate_rise_m: float) -> float:
-        target_wheel_center_y_m = candidate_rise_m + WHEEL_RADIUS_M
-        cosine = (pivot_y_m - target_wheel_center_y_m) / LEG_LENGTH_M
-        cosine = max(-1.0, min(1.0, cosine))
-        return math.degrees(math.acos(cosine))
-
-    # The 2-D rigid geometry gives the minimum rim-clearance angle.  Preserve
-    # the additional clearance already validated by alex_v2 at a 0.10 m rise.
-    calibrated_clearance_deg = (
-        REFERENCE_LIFT_ANGLE_DEG - raw_lift_angle(VALIDATED_RISE_M)
-    )
-    return round(raw_lift_angle(rise_m) + calibrated_clearance_deg, 9)
+    target_wheel_center_y_m = rise_m + LIFT_CLEARANCE_M + WHEEL_RADIUS_M
+    cosine = (pivot_y_m - target_wheel_center_y_m) / LEG_LENGTH_M
+    if cosine < -1.0 or cosine > 1.0:
+        raise ValueError("stair rise plus lift clearance exceeds leg reach")
+    collision_free_angle_deg = math.degrees(math.acos(cosine))
+    return round(max(MINIMUM_LIFT_ANGLE_DEG, collision_free_angle_deg), 9)
 
 
 def geometric_transition_angle_deg(rise_m: float, run_m: float) -> float:
-    """Calculate the stair-slope transition angle with validated clearance."""
+    """Calculate transition angle while preserving the stable stance minimum."""
     reference_slope_deg = math.degrees(
         math.atan2(VALIDATED_RISE_M, VALIDATED_RUN_M)
     )
     transition_clearance_deg = REFERENCE_TRANSITION_ANGLE_DEG - reference_slope_deg
     stair_slope_deg = math.degrees(math.atan2(rise_m, run_m))
-    return round(stair_slope_deg + transition_clearance_deg, 9)
+    geometric_angle_deg = stair_slope_deg + transition_clearance_deg
+    stable_angle_deg = 2.0 * MINIMUM_FRONT_REAR_STANCE_SEPARATION_DEG
+    return round(max(geometric_angle_deg, stable_angle_deg), 9)
 
 
 def calculate_geometry_angles(rise_m: float, run_m: float) -> GeometryAngles:
@@ -409,6 +453,12 @@ def _retime_hub_only_segments(
                 # initial drive could push the still-grounded FL into riser 1.
                 if hub_only_segment_index == 1:
                     desired_distance_m += entry_approach_rise_correction_m(rise_m)
+                    desired_distance_m += entry_approach_run_correction_m(run_m)
+                # Segment 2 advances the chassis while the second FR swing is
+                # fully lifted.  Put the short-tread landing reserve here so a
+                # still-grounded FL is not pushed toward riser 2 beforehand.
+                if hub_only_segment_index == 2:
+                    desired_distance_m += short_run_fr_landing_correction_m(run_m)
             duration_sec = desired_distance_m / (ideal_speed_mps * drive_scale)
             hub_only_segment_index += 1
         new_time = round(result[-1].time + duration_sec, 9)
@@ -630,7 +680,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(f"error: {error}") from error
     angles = calculate_geometry_angles(args.rise, args.run)
     clearance_mm = initial_front_clearance_m(args.center_to_first_riser) * 1000.0
-    entry_correction_mm = entry_approach_rise_correction_m(args.rise) * 1000.0
+    entry_rise_correction_mm = (
+        entry_approach_rise_correction_m(args.rise) * 1000.0
+    )
+    entry_run_correction_mm = entry_approach_run_correction_m(args.run) * 1000.0
+    short_run_landing_correction_mm = (
+        short_run_fr_landing_correction_m(args.run) * 1000.0
+    )
     print(
         "geometry: "
         f"outward={angles.outward_deg:.3f} deg, "
@@ -639,7 +695,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"rear_landing_correction={angles.rear_landing_correction_deg:.3f} deg, "
         f"middle_fl_retreat={angles.middle_fl_retreat_command:.3f}, "
         f"initial_clearance={clearance_mm:.3f} mm, "
-        f"entry_approach_correction={entry_correction_mm:.3f} mm"
+        f"entry_rise_correction={entry_rise_correction_mm:.3f} mm, "
+        f"entry_run_correction={entry_run_correction_mm:.3f} mm, "
+        f"short_run_fr_landing_correction="
+        f"{short_run_landing_correction_mm:.3f} mm"
     )
     print(f"wrote {len(rows)} gait rows to {args.output.expanduser().resolve()}")
     return 0

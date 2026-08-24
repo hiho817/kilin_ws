@@ -2,6 +2,7 @@
 
 import csv
 import importlib.util
+import math
 import sys
 import tempfile
 import unittest
@@ -92,10 +93,26 @@ class GenerateStairCsvTest(unittest.TestCase):
                 transitions.append(row.arm_phase)
         self.assertEqual([4, 0, 3, 0, 2, 0], transitions)
 
-    def test_rise_changes_calculated_fr_lift_angle(self):
+    def test_15cm_rise_keeps_conservative_90_degree_lift(self):
         rows = generator.generate_gait(rise_m=0.15)
         lift_row = next(row for row in rows if row.arm_phase == 2)
-        self.assertLess(lift_row.hips[1], -90.0)
+        self.assertEqual(-90.0, lift_row.hips[1])
+
+    def test_lift_increases_only_when_90_degrees_lacks_clearance(self):
+        angle = generator.geometric_lift_angle_deg(0.20)
+        self.assertGreater(angle, 90.0)
+
+        pivot_height = (
+            generator.WHEEL_RADIUS_M
+            + generator.LEG_LENGTH_M
+            * math.cos(math.radians(generator.OUTWARD_ANGLE_DEG))
+        )
+        wheel_bottom = (
+            pivot_height
+            - generator.LEG_LENGTH_M * math.cos(math.radians(angle))
+            - generator.WHEEL_RADIUS_M
+        )
+        self.assertAlmostEqual(0.20 + generator.LIFT_CLEARANCE_M, wheel_bottom)
 
     def test_validated_geometry_reconstructs_independent_angles(self):
         angles = generator.calculate_geometry_angles(0.10, 0.35)
@@ -104,6 +121,20 @@ class GenerateStairCsvTest(unittest.TestCase):
         self.assertEqual(20.0, angles.transition_deg)
         self.assertEqual(0.0, angles.rear_landing_correction_deg)
         self.assertEqual(0.0, angles.middle_fl_retreat_command)
+
+    def test_shallow_stair_keeps_ten_degree_front_rear_stance_separation(self):
+        angles = generator.calculate_geometry_angles(0.08, 0.40)
+        cycle = generator.build_climb_cycle(angles)
+
+        self.assertEqual(20.0, angles.transition_deg)
+        # Immediately before the long FR swing, point 6 places both front
+        # hips at transition/2 and both rear hips at transition (modulo 360).
+        front = cycle[6].hip_offset[0]
+        rear = cycle[6].hip_offset[2]
+        self.assertAlmostEqual(
+            generator.MINIMUM_FRONT_REAR_STANCE_SEPARATION_DEG,
+            rear - front,
+        )
 
     def test_dimensions_change_middle_cycle_and_stage3_hip_angles(self):
         reference = generator.calculate_geometry_angles(0.10, 0.35)
@@ -120,11 +151,79 @@ class GenerateStairCsvTest(unittest.TestCase):
         clearance = generator.initial_front_clearance_m(0.63)
         self.assertAlmostEqual(0.173589160, clearance, places=9)
 
-    def test_run_scales_noninitial_hub_only_duration(self):
+    def test_run_scales_entry_duration_and_caps_measured_correction(self):
         rows = generator.generate_gait(run_m=0.70)
         drive_start = next(row for row in rows if row.hips == (320.0, -40.0, 40.0, 40.0))
         following = rows[rows.index(drive_start) + 1]
-        self.assertEqual(2.0, following.time - drive_start.time)
+        correction_duration = (
+            generator.entry_approach_run_correction_m(0.70)
+            / generator.ideal_hub_speed_mps(100.0)
+        )
+        self.assertAlmostEqual(
+            2.0 + correction_duration,
+            following.time - drive_start.time,
+            places=8,
+        )
+
+    def test_40cm_run_adds_measured_second_fr_landing_correction(self):
+        self.assertAlmostEqual(0.055, generator.entry_approach_run_correction_m(0.40))
+        self.assertEqual(0.0, generator.entry_approach_run_correction_m(0.35))
+        self.assertEqual(0.0, generator.entry_approach_run_correction_m(0.30))
+        self.assertAlmostEqual(
+            generator.entry_approach_run_correction_m(0.40),
+            generator.entry_approach_run_correction_m(0.50),
+        )
+
+    def test_short_run_fr_landing_correction_starts_below_35cm_and_caps_at_15mm(self):
+        self.assertAlmostEqual(0.015, generator.short_run_fr_landing_correction_m(0.30))
+        self.assertAlmostEqual(0.015, generator.short_run_fr_landing_correction_m(0.33))
+        self.assertAlmostEqual(0.0075, generator.short_run_fr_landing_correction_m(0.34))
+        self.assertEqual(0.0, generator.short_run_fr_landing_correction_m(0.35))
+        self.assertEqual(0.0, generator.short_run_fr_landing_correction_m(0.40))
+        self.assertAlmostEqual(
+            generator.short_run_fr_landing_correction_m(0.30),
+            generator.short_run_fr_landing_correction_m(0.20),
+        )
+
+    def test_33cm_run_adds_full_correction_to_fully_lifted_fr_drive(self):
+        rows = generator.generate_gait(rise_m=0.11, run_m=0.33)
+        lift_drive_end = next(
+            row for row in rows
+            if row.hips == (320.0, -90.0, 40.0, 40.0)
+            and row.hub_velocity == (125.0, 125.0, 125.0, 125.0)
+        )
+        lift_drive_start = rows[rows.index(lift_drive_end) - 1]
+        scaled_reference_duration = 2.0 * 0.33 / generator.VALIDATED_RUN_M
+        correction_duration = (
+            generator.short_run_fr_landing_correction_m(0.33)
+            / generator.ideal_hub_speed_mps(125.0)
+        )
+
+        self.assertAlmostEqual(
+            scaled_reference_duration + correction_duration,
+            lift_drive_end.time - lift_drive_start.time,
+            places=8,
+        )
+
+    def test_30cm_run_adds_correction_only_to_fully_lifted_fr_drive(self):
+        rows = generator.generate_gait(rise_m=0.12, run_m=0.30)
+        lift_drive_end = next(
+            row for row in rows
+            if row.hips == (320.0, -90.0, 40.0, 40.0)
+            and row.hub_velocity == (125.0, 125.0, 125.0, 125.0)
+        )
+        lift_drive_start = rows[rows.index(lift_drive_end) - 1]
+        scaled_reference_duration = 2.0 * 0.30 / generator.VALIDATED_RUN_M
+        correction_duration = (
+            generator.short_run_fr_landing_correction_m(0.30)
+            / generator.ideal_hub_speed_mps(125.0)
+        )
+
+        self.assertAlmostEqual(
+            scaled_reference_duration + correction_duration,
+            lift_drive_end.time - lift_drive_start.time,
+            places=8,
+        )
 
     def test_taller_rise_extends_approach_before_second_fr_lift(self):
         reference = generator.generate_gait(rise_m=0.10)
@@ -154,6 +253,23 @@ class GenerateStairCsvTest(unittest.TestCase):
 
     def test_shorter_rise_does_not_remove_entry_clearance(self):
         self.assertEqual(0.0, generator.entry_approach_rise_correction_m(0.08))
+
+    def test_empirical_rise_corrections_are_capped_at_validated_12cm(self):
+        self.assertAlmostEqual(
+            generator.entry_approach_rise_correction_m(0.12),
+            generator.entry_approach_rise_correction_m(0.15),
+        )
+        self.assertAlmostEqual(
+            generator.rear_landing_rise_correction_deg(0.12),
+            generator.rear_landing_rise_correction_deg(0.15),
+        )
+        self.assertAlmostEqual(
+            generator.middle_fl_retreat_command(0.12),
+            generator.middle_fl_retreat_command(0.15),
+        )
+        self.assertAlmostEqual(0.056, generator.entry_approach_rise_correction_m(0.15))
+        self.assertAlmostEqual(2.0, generator.rear_landing_rise_correction_deg(0.15))
+        self.assertAlmostEqual(-50.0, generator.middle_fl_retreat_command(0.15))
 
     def test_taller_rise_moves_rear_landing_support_rearward(self):
         angles = generator.calculate_geometry_angles(0.12, 0.35)

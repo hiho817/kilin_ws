@@ -108,8 +108,8 @@ calibrated leg reach are rejected.
 All continuous hip targets are constructed from three independent angles:
 
 - `outward`: the robot's fixed 40-degree initial support configuration;
-- `lift`: inverse geometry from stair rise and the wheel/pivot dimensions,
-  retaining the clearance validated by the 90-degree baseline lift;
+- `lift`: the conservative 90-degree alex_v2 swing, increased only when the
+  wheel rim would otherwise fail to clear the tread by 10 mm;
 - `transition`: `atan2(rise, run)` plus the transition clearance calibrated by
   the successful 10/35 gait.
 
@@ -119,6 +119,10 @@ values such as 320, 340, 370, 380, 400, and the stage-3 angles are generated
 expressions rather than independent copied constants. At the validated 0.10 m
 rise and 0.35 m run, the independent values are 40/90/20 degrees and reconstruct
 the complete `alex_v2.csv` exactly.
+
+Rise-dependent entry, rear-landing, and middle-retreat corrections are measured
+calibrations from the successful 0.12/0.35 gait. They are capped at their 0.12 m
+values instead of being extrapolated into untested taller-stair commands.
 
 Stage 3 always uses the validated flat-top continuous targets, independent of
 stair rise and run. In the one-cycle three-step gait the split-front sequence is
