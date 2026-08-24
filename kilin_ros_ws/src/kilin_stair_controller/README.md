@@ -75,6 +75,22 @@ The input positions and COM are currently expected in the world frame.
 is selected. Keep it at zero while AMR +X and world +X are aligned; update it if
 the robot begins with a nonzero heading.
 
+`arm_base_yaw_offset_deg` then rotates the AMR-frame correction into the Kinova
+base mounting frame. Use `0.0` when Kinova base +X points toward AMR +X, as in
+the current simulation. Use `180.0` on hardware when the Kinova base is mounted
+backward, so an AMR-forward correction commands J1 to 180 degrees. This mounting
+offset is independent of `amr_yaw_in_world_deg`; do not use the AMR heading
+parameter to compensate for the arm installation.
+
+Hardware configuration for the backward-mounted base:
+
+```yaml
+amr_yaw_in_world_deg: 0.0
+arm_base_yaw_offset_deg: 180.0
+standard_pose_deg: [180.0, -85.94, 0.0, 147.0, 0.0, 22.92, 0.0]
+full_extension_pose_deg: [180.0, 90.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+```
+
 ## Offline gait generator
 
 `generate_stair_csv` generates a controller-compatible CSV from the validated

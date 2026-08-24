@@ -75,6 +75,7 @@ public:
     declare_parameter<double>("com_alpha_step", 0.05);
     declare_parameter<double>("com_safe_hold_sec", 0.3);
     declare_parameter<double>("amr_yaw_in_world_deg", 0.0);
+    declare_parameter<double>("arm_base_yaw_offset_deg", 0.0);
     const std::vector<double> default_standard_pose =
     {0.0, -85.94, 0.0, 147.0, 0.0, 22.92, 0.0};
     const std::vector<double> default_front_pose =
@@ -110,6 +111,8 @@ public:
     com_alpha_step_ = get_parameter("com_alpha_step").as_double();
     com_safe_hold_sec_ = get_parameter("com_safe_hold_sec").as_double();
     amr_yaw_in_world_rad_ = get_parameter("amr_yaw_in_world_deg").as_double() * M_PI / 180.0;
+    arm_base_yaw_offset_rad_ =
+      get_parameter("arm_base_yaw_offset_deg").as_double() * M_PI / 180.0;
     standard_pose_ =
       degrees_to_radians(get_parameter("standard_pose_deg").as_double_array());
     full_extension_pose_ =
@@ -138,7 +141,8 @@ public:
       invalid_compensation_pose ||
       (arm_control_mode_ != "fixed_phase" && arm_control_mode_ != "com_closed_loop") ||
       balance_state_timeout_sec_ <= 0.0 || com_safe_margin_m_ < 0.0 ||
-      com_alpha_step_ <= 0.0 || com_alpha_step_ > 1.0 || com_safe_hold_sec_ < 0.0)
+      com_alpha_step_ <= 0.0 || com_alpha_step_ > 1.0 || com_safe_hold_sec_ < 0.0 ||
+      !std::isfinite(amr_yaw_in_world_rad_) || !std::isfinite(arm_base_yaw_offset_rad_))
     {
       throw std::runtime_error(
               "Invalid rate/action/timing parameter or Kinova pose; arm_timeout_sec must "
@@ -183,9 +187,11 @@ public:
     if (closed_loop_arm_) {
       RCLCPP_INFO(
         get_logger(),
-        "COM input: %s, safe margin: %.1f mm, alpha step: %.3f, AMR yaw: %.2f deg",
+        "COM input: %s, safe margin: %.1f mm, alpha step: %.3f, AMR yaw: %.2f deg, "
+        "arm base yaw offset: %.2f deg",
         balance_state_topic_.c_str(), com_safe_margin_m_ * 1000.0, com_alpha_step_,
-        amr_yaw_in_world_rad_ * 180.0 / M_PI);
+        amr_yaw_in_world_rad_ * 180.0 / M_PI,
+        arm_base_yaw_offset_rad_ * 180.0 / M_PI);
     }
   }
 
@@ -590,7 +596,8 @@ private:
       cosine * stability->direction.x + sine * stability->direction.y;
     const double direction_amr_y =
       -sine * stability->direction.x + cosine * stability->direction.y;
-    double target_j1 = -std::atan2(direction_amr_y, direction_amr_x);
+    double target_j1 = kilin_stair_controller::geometry::arm_joint1_for_direction(
+      {direction_amr_x, direction_amr_y}, arm_base_yaw_offset_rad_);
     const double reference_j1 = held_arm_pose_[0];
     target_j1 = reference_j1 + std::remainder(target_j1 - reference_j1, 2.0 * M_PI);
 
@@ -1033,6 +1040,7 @@ private:
   double com_alpha_step_{};
   double com_safe_hold_sec_{};
   double amr_yaw_in_world_rad_{};
+  double arm_base_yaw_offset_rad_{};
   std::vector<double> standard_pose_;
   std::vector<double> full_extension_pose_;
   std::vector<double> held_arm_pose_;

@@ -39,3 +39,19 @@ TEST(SupportGeometry, ReportsSafePointInsideInsetTriangle)
   EXPECT_TRUE(result.inside_safe_region);
   EXPECT_DOUBLE_EQ(result.correction_distance, 0.0);
 }
+
+TEST(ArmGeometry, AppliesBaseYawOffsetToCardinalDirections)
+{
+  constexpr double pi = 3.14159265358979323846;
+
+  EXPECT_NEAR(geometry::arm_joint1_for_direction({1.0, 0.0}, 0.0), 0.0, 1e-12);
+  EXPECT_NEAR(geometry::arm_joint1_for_direction({0.0, 1.0}, 0.0), -pi / 2.0, 1e-12);
+  EXPECT_NEAR(geometry::arm_joint1_for_direction({1.0, 0.0}, pi), pi, 1e-12);
+  EXPECT_NEAR(geometry::arm_joint1_for_direction({0.0, 1.0}, pi), pi / 2.0, 1e-12);
+  EXPECT_NEAR(geometry::arm_joint1_for_direction({-1.0, 0.0}, pi), 0.0, 1e-12);
+}
+
+TEST(ArmGeometry, RejectsZeroDirection)
+{
+  EXPECT_THROW(geometry::arm_joint1_for_direction({0.0, 0.0}, 0.0), std::runtime_error);
+}

@@ -34,6 +34,19 @@ struct StabilityResult
   double correction_distance{};
 };
 
+inline double arm_joint1_for_direction(
+  const Point2 & direction_in_amr, double arm_base_yaw_offset_rad)
+{
+  if (!std::isfinite(direction_in_amr.x) || !std::isfinite(direction_in_amr.y) ||
+    !std::isfinite(arm_base_yaw_offset_rad) ||
+    std::hypot(direction_in_amr.x, direction_in_amr.y) <= 1e-12)
+  {
+    throw std::runtime_error(
+            "Arm direction must be finite and nonzero, and base-yaw offset must be finite");
+  }
+  return arm_base_yaw_offset_rad - std::atan2(direction_in_amr.y, direction_in_amr.x);
+}
+
 inline double cross(const Point2 & origin, const Point2 & a, const Point2 & b)
 {
   return (a.x - origin.x) * (b.y - origin.y) -
