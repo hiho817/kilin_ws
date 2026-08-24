@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>kilin_robot_description</name>
+  <version>0.1.0</version>
+  <description>Self-contained inertial and kinematic model for Kilin with a hardware-mounted Kinova Gen3 arm.</description>
+  <maintainer email="ian@example.com">Ian</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>urdf</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
+

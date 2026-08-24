@@ -1,0 +1,758 @@
+<?xml version="1.0"?>
+<!--
+  Inertial/kinematic model for hardware COM estimation.
+  Vehicle source: AMRV2_only_nosupport_0323_URDF (SolidWorks export).
+  Arm source: Kinova Kortex Gen3 7-DOF, without vision module or gripper.
+  Units: metres, radians, kilograms.
+-->
+<robot name="kilin_gen3_hardware">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="-0.0157732586479787 0.00188943647629547 0.0154395793403063"
+        rpy="0 0 0" />
+      <mass
+        value="20.1135777" />
+      <inertia
+        ixx="0.3358663"
+        ixy="0.0020392"
+        ixz="0.0157775"
+        iyy="0.6724929"
+        iyz="-0.0005533"
+        izz="0.8366770" />
+    </inertial>
+  </link>
+  <link
+    name="FL_hip_link">
+    <inertial>
+      <origin
+        xyz="-6.7288E-05 0.011399 0.097884"
+        rpy="0 0 0" />
+      <mass
+        value="1.4192271" />
+      <inertia
+        ixx="0.0069868"
+        ixy="-0.0000037"
+        ixz="-0.0000051"
+        iyy="0.0026687"
+        iyz="0.0000690"
+        izz="0.0053806" />
+    </inertial>
+  </link>
+  <joint
+    name="FL_hip"
+    type="revolute">
+    <origin
+      xyz="0.24448 0.13106 -0.026929"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="FL_hip_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="3" />
+  </joint>
+  <link
+    name="FL_steering_link">
+    <inertial>
+      <origin
+        xyz="-0.00042264003178738 -0.00239185390859273 0.0120471191414175"
+        rpy="0 0 0" />
+      <mass
+        value=" 0.1476068" />
+      <inertia
+        ixx="0.0000787"
+        ixy="0.0000001"
+        ixz="-0.0000001"
+        iyy="0.0000785"
+        iyz="-0.0000001"
+        izz="0.0000165" />
+    </inertial>
+  </link>
+  <joint
+    name="FL_steering"
+    type="revolute">
+    <origin
+      xyz="0 0 0.117999999999998"
+      rpy="1.5707963267949 0 0" />
+    <parent
+      link="FL_hip_link" />
+    <child
+      link="FL_steering_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-1.57"
+      upper="1.57"
+      effort="10"
+      velocity="3" />
+  </joint>
+  <link
+    name="FL_suspension_link">
+    <inertial>
+      <origin
+        xyz="-6.34553768708024E-06 -1.78159153982338E-06 -0.150928743812755"
+        rpy="0 0 0" />
+       <mass
+        value="0.2584073" />
+      <inertia
+        ixx="0.0008798"
+        ixy="0.0000000"
+        ixz="0.0000004"
+        iyy="0.0007955"
+        iyz="0.0000002"
+        izz="0.0001056" />
+    </inertial>
+  </link>
+  <joint
+    name="FL_suspension"
+    type="prismatic">
+    <origin
+      xyz="0 0 0"
+      rpy="0 0 0" />
+    <parent
+      link="FL_steering_link" />
+    <child
+      link="FL_suspension_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="0.017"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="FL_wheel_link">
+    <inertial>
+      <origin
+        xyz="-4.66260298148669E-07 -3.1727225457967E-08 2.78629209982117E-07"
+        rpy="0 0 0" />
+      <mass
+        value="1.6066304" />
+      <inertia
+        ixx="0.0013748"
+        ixy="0.0000000"
+        ixz="0.0000000"
+        iyy="0.0013748"
+        iyz="0.0000000"
+        izz="0.0020786" />
+    </inertial>
+  </link>
+  <joint
+    name="FL_wheel"
+    type="revolute">
+    <origin
+      xyz="0 0 -0.26"
+      rpy="-1.5707963267949 0 0" />
+    <parent
+      link="FL_suspension_link" />
+    <child
+      link="FL_wheel_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-30"
+      upper="30"
+      effort="5"
+      velocity="3" />
+  </joint>
+  <link
+    name="FR_hip_link">
+    <inertial>
+      <origin
+        xyz="6.7288E-05 0.011399 -0.097884"
+        rpy="0 0 0" />
+      <mass
+        value="1.4192271" />
+      <inertia
+        ixx="0.0069868"
+        ixy="0.0000037"
+        ixz="-0.0000051"
+        iyy="0.0026687"
+        iyz="-0.0000690"
+        izz="0.0053806" />
+    </inertial>
+  </link>
+  <joint
+    name="FR_hip"
+    type="revolute">
+    <origin
+      xyz="0.24448 -0.12894 -0.026929"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="FR_hip_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="3" />
+  </joint>
+  <link
+    name="FR__steering_link">
+    <inertial>
+      <origin
+        xyz="0.000422640037611832 0.00239185393046074 0.0120471187970914"
+        rpy="0 0 0" />
+     <mass
+        value=" 0.1476068" />
+      <inertia
+        ixx="0.0000787"
+        ixy="0.0000001"
+        ixz="0.0000001"
+        iyy="0.0000785"
+        iyz="0.0000001"
+        izz="0.0000165" />
+    </inertial>
+  </link>
+  <joint
+    name="FR_steering"
+    type="revolute">
+    <origin
+      xyz="0 0 -0.117999999999998"
+      rpy="1.5707963267949 0 0" />
+    <parent
+      link="FR_hip_link" />
+    <child
+      link="FR__steering_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-1.57"
+      upper="1.57"
+      effort="10"
+      velocity="3" />
+  </joint>
+  <link
+    name="FR_suspension_link">
+    <inertial>
+      <origin
+        xyz="6.34553769041091E-06 1.781591539185E-06 -0.150928743812754"
+        rpy="0 0 0" />
+      <mass
+        value="0.2584073" />
+      <inertia
+        ixx="0.0008798"
+        ixy="0.0000000"
+        ixz="-0.0000004"
+        iyy="0.0007955"
+        iyz="-0.0000002"
+        izz="0.0001056" />
+    </inertial>
+  </link>
+  <joint
+    name="FR_suspension"
+    type="prismatic">
+    <origin
+      xyz="0 0 0"
+      rpy="0 0 0" />
+    <parent
+      link="FR__steering_link" />
+    <child
+      link="FR_suspension_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="0.017"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="FR_wheel_link">
+    <inertial>
+      <origin
+        xyz="4.66260297926624E-07 -3.17272261518564E-08 -2.78629210315184E-07"
+        rpy="0 0 0" />
+       <mass
+        value="1.6066304" />
+      <inertia
+        ixx="0.0013748"
+        ixy="0.0000000"
+        ixz="0.0000000"
+        iyy="0.0013748"
+        iyz="0.0000000"
+        izz="0.0020786" />
+    </inertial>
+  </link>
+  <joint
+    name="FR_wheel"
+    type="revolute">
+    <origin
+      xyz="0 0 -0.26"
+      rpy="-1.5707963267949 0 0" />
+    <parent
+      link="FR_suspension_link" />
+    <child
+      link="FR_wheel_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-30"
+      upper="30"
+      effort="5"
+      velocity="3" />
+  </joint>
+  <link
+    name="RL_hip_link">
+    <inertial>
+      <origin
+        xyz="-6.7288E-05 0.011399 0.097884"
+        rpy="0 0 0" />
+      <mass
+        value="1.4192271" />
+      <inertia
+        ixx="0.0069868"
+        ixy="-0.0000037"
+        ixz="-0.0000051"
+        iyy="0.0026687"
+        iyz="0.0000690"
+        izz="0.0053806" />
+    </inertial>
+  </link>
+  <joint
+    name="RL_hip"
+    type="revolute">
+    <origin
+      xyz="-0.23552 0.13106 -0.026929"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="RL_hip_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="3" />
+  </joint>
+  <link
+    name="RL_steering_link">
+    <inertial>
+      <origin
+        xyz="-0.000422639994594715 -0.00239185388588709 0.0120471200048065"
+        rpy="0 0 0" />
+       <mass
+        value=" 0.1476068" />
+      <inertia
+        ixx="0.0000787"
+        ixy="0.0000001"
+        ixz="-0.0000001"
+        iyy="0.0000785"
+        iyz="-0.0000001"
+        izz="0.0000165" />
+    </inertial>
+  </link>
+  <joint
+    name="RL_steering"
+    type="revolute">
+    <origin
+      xyz="0 0 0.117999999999998"
+      rpy="1.57079632679489 0 0" />
+    <parent
+      link="RL_hip_link" />
+    <child
+      link="RL_steering_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-1.57"
+      upper="1.57"
+      effort="10"
+      velocity="3" />
+  </joint>
+  <link
+    name="RL_suspension_link">
+    <inertial>
+      <origin
+        xyz="-6.34553768620594E-06 -1.78159153924051E-06 -0.150928743812755"
+        rpy="0 0 0" />
+       <mass
+        value="0.2584073" />
+      <inertia
+        ixx="0.0008798"
+        ixy="0.0000000"
+        ixz="0.0000004"
+        iyy="0.0007955"
+        iyz="0.0000002"
+        izz="0.0001056" />
+    </inertial>
+  </link>
+  <joint
+    name="RL_suspension"
+    type="prismatic">
+    <origin
+      xyz="0 0 0"
+      rpy="0 0 0" />
+    <parent
+      link="RL_steering_link" />
+    <child
+      link="RL_suspension_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="0.017"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="RL_wheel_link">
+    <inertial>
+      <origin
+        xyz="-4.66260297815602E-07 -3.17272258326673E-08 2.78629210315184E-07"
+        rpy="0 0 0" />
+      <mass
+        value="1.6066304" />
+      <inertia
+        ixx="0.0013748"
+        ixy="0.0000000"
+        ixz="0.0000000"
+        iyy="0.0013748"
+        iyz="0.0000000"
+        izz="0.0020786" />
+    </inertial>
+  </link>
+  <joint
+    name="RL_wheel"
+    type="revolute">
+    <origin
+      xyz="0 0 -0.26"
+      rpy="-1.57079632679489 0 0" />
+    <parent
+      link="RL_suspension_link" />
+    <child
+      link="RL_wheel_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-30"
+      upper="30"
+      effort="5"
+      velocity="3" />
+  </joint>
+  <link
+    name="RR_hip_link">
+    <inertial>
+      <origin
+        xyz="6.7288E-05 0.011399 -0.097884"
+        rpy="0 0 0" />
+      <mass
+        value="1.4192271" />
+      <inertia
+        ixx="0.0069868"
+        ixy="0.0000037"
+        ixz="-0.0000051"
+        iyy="0.0026687"
+        iyz="-0.0000690"
+        izz="0.0053806" />
+    </inertial>
+  </link>
+  <joint
+    name="RR_hip"
+    type="revolute">
+    <origin
+      xyz="-0.23552 -0.12894 -0.026929"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="RR_hip_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="3" />
+  </joint>
+  <link
+    name="RR_steering_link">
+    <inertial>
+      <origin
+        xyz="0.00042264 0.0023919 0.012047"
+        rpy="0 0 0" />
+       <mass
+        value=" 0.1476068" />
+      <inertia
+        ixx="0.0000787"
+        ixy="0.0000001"
+        ixz="0.0000001"
+        iyy="0.0000785"
+        iyz="0.0000001"
+        izz="0.0000165" />
+    </inertial>
+  </link>
+  <joint
+    name="RR_steering"
+    type="revolute">
+    <origin
+      xyz="0 0 -0.117999999999998"
+      rpy="1.5707963267949 0 0" />
+    <parent
+      link="RR_hip_link" />
+    <child
+      link="RR_steering_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-1.57"
+      upper="1.57"
+      effort="10"
+      velocity="3" />
+  </joint>
+  <link
+    name="RR_suspension_link">
+    <inertial>
+      <origin
+        xyz="6.34553768659452E-06 1.78159153935153E-06 -0.150928743812754"
+        rpy="0 0 0" />
+      <mass
+        value="0.2584073" />
+      <inertia
+        ixx="0.0008798"
+        ixy="0.0000000"
+        ixz="-0.0000004"
+        iyy="0.0007955"
+        iyz="-0.0000002"
+        izz="0.0001056" />
+    </inertial>
+  </link>
+  <joint
+    name="RR_suspension"
+    type="prismatic">
+    <origin
+      xyz="0 0 0"
+      rpy="0 0 0" />
+    <parent
+      link="RR_steering_link" />
+    <child
+      link="RR_suspension_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="0.017"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="RR_wheel_link">
+    <inertial>
+      <origin
+        xyz="4.66260298245813E-07 -3.17272261241008E-08 -2.78629210259673E-07"
+        rpy="0 0 0" />
+      <mass
+        value="1.6066304" />
+      <inertia
+        ixx="0.0013748"
+        ixy="0.0000000"
+        ixz="0.0000000"
+        iyy="0.0013748"
+        iyz="0.0000000"
+        izz="0.0020786" />
+    </inertial>
+  </link>
+  <joint
+    name="RR_wheel"
+    type="revolute">
+    <origin
+      xyz="0 0 -0.26"
+      rpy="-1.5707963267949 0 0" />
+    <parent
+      link="RR_suspension_link" />
+    <child
+      link="RR_wheel_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-30"
+      upper="30"
+      effort="5"
+      velocity="3" />
+  </joint>
+
+  <!--
+    Kinova mounting transform measured from the Kilin base_link origin to the
+    centre of the Kinova base mounting plane. The hardware arm is yawed 180 deg.
+  -->
+  <joint name="kilin_to_arm" type="fixed">
+    <parent link="base_link" />
+    <child link="arm_base_link" />
+    <origin xyz="0.16826 0 -0.07970" rpy="0 0 3.141592653589793" />
+  </joint>
+
+      <link name="arm_base_link">
+        <inertial>
+          <origin xyz="-0.000648 -0.000166 0.084487" rpy="0 0 0" />
+          <mass value="1.697" />
+          <inertia ixx="0.004622" ixy="9E-06" ixz="6E-05" iyy="0.004495" iyz="9E-06" izz="0.002079" />
+        </inertial>
+    </link>
+    <link name="arm_shoulder_link">
+      <inertial>
+        <origin xyz="-2.3E-05 -0.010364 -0.07336" rpy="0 0 0" />
+        <mass value="1.3773" />
+        <inertia ixx="0.00457" ixy="1E-06" ixz="2E-06" iyy="0.004831" iyz="0.000448" izz="0.001409" />
+      </inertial>
+    </link>
+    <joint
+      name="arm_joint_1"
+      type="continuous">
+      <origin xyz="0 0 0.15643" rpy="3.1416 2.7629E-18 -4.9305E-36" />
+      <parent
+        link="arm_base_link" />
+      <child
+        link="arm_shoulder_link" />
+      <axis
+        xyz="0 0 1" />
+      <limit
+        effort="39"
+        velocity="1.3963" />
+    </joint>
+    <link name="arm_half_arm_1_link">
+      <inertial>
+        <origin xyz="-4.4E-05 -0.09958 -0.013278" rpy="0 0 0" />
+        <mass value="1.1636" />
+        <inertia ixx="0.011088" ixy="5E-06" ixz="0" iyy="0.001072" iyz="-0.000691" izz="0.011255" />
+      </inertial>
+    </link>
+    <joint
+      name="arm_joint_2"
+      type="revolute">
+      <origin xyz="0 0.005375 -0.12838" rpy="1.5708 2.1343E-17 -1.1102E-16" />
+      <parent
+        link="arm_shoulder_link" />
+      <child
+        link="arm_half_arm_1_link" />
+      <axis
+        xyz="0 0 1" />
+      <limit lower="-2.24" upper="2.24" effort="39" velocity="1.3963" />
+    </joint>
+    <link name="arm_half_arm_2_link">
+      <inertial>
+        <origin xyz="-4.4E-05 -0.006641 -0.117892" rpy="0 0 0" />
+        <mass value="1.1636" />
+        <inertia ixx="0.010932" ixy="0" ixz="-7E-06" iyy="0.011127" iyz="0.000606" izz="0.001043" />
+      </inertial>
+    </link>
+    <joint
+      name="arm_joint_3"
+      type="continuous">
+      <origin xyz="0 -0.21038 -0.006375" rpy="-1.5708 1.2326E-32 -2.9122E-16" />
+      <parent
+        link="arm_half_arm_1_link" />
+      <child
+        link="arm_half_arm_2_link" />
+      <axis
+        xyz="0 0 1" />
+      <limit
+        effort="39"
+        velocity="1.3963" />
+    </joint>
+    <link name="arm_forearm_link">
+      <inertial>
+        <origin xyz="-1.8E-05 -0.075478 -0.015006" rpy="0 0 0" />
+        <mass value="0.9302" />
+        <inertia ixx="0.008147" ixy="-1E-06" ixz="0" iyy="0.000631" iyz="-0.0005" izz="0.008316" />
+      </inertial>
+    </link>
+    <joint
+      name="arm_joint_4"
+      type="revolute">
+      <origin xyz="0 0.006375 -0.21038" rpy="1.5708 -6.6954E-17 -1.6653E-16" />
+      <parent
+        link="arm_half_arm_2_link" />
+      <child
+        link="arm_forearm_link" />
+      <axis
+        xyz="0 0 1" />
+      <limit lower="-2.57" upper="2.57" effort="39" velocity="1.3963" />
+    </joint>
+    <link name="arm_spherical_wrist_1_link">
+      <inertial>
+        <origin xyz="1E-06 -0.009432 -0.063883" rpy="0 0 0" />
+        <mass value="0.6781" />
+        <inertia ixx="0.001596" ixy="0" ixz="0" iyy="0.001607" iyz="0.000256" izz="0.000399" />
+      </inertial>
+    </link>
+    <joint
+      name="arm_joint_5"
+      type="continuous">
+      <origin xyz="0 -0.20843 -0.006375" rpy="-1.5708 2.2204E-16 -6.373E-17" />
+      <parent
+        link="arm_forearm_link" />
+      <child
+        link="arm_spherical_wrist_1_link" />
+      <axis
+        xyz="0 0 1" />
+      <limit
+        effort="9"
+        velocity="1.2218" />
+    </joint>
+    <link name="arm_spherical_wrist_2_link">
+      <inertial>
+        <origin xyz="1E-06 -0.045483 -0.00965" rpy="0 0 0" />
+        <mass value="0.6781" />
+        <inertia ixx="0.001641" ixy="0" ixz="0" iyy="0.00041" iyz="-0.000278" izz="0.001641" />
+      </inertial>
+    </link>
+    <joint
+      name="arm_joint_6"
+      type="revolute">
+      <origin xyz="0 0.00017505 -0.10593" rpy="1.5708 9.2076E-28 -8.2157E-15" />
+      <parent
+        link="arm_spherical_wrist_1_link" />
+      <child
+        link="arm_spherical_wrist_2_link" />
+      <axis
+        xyz="0 0 1" />
+      <limit lower="-2.09" upper="2.09" effort="9" velocity="1.2218" />
+    </joint>
+    <link name="arm_bracelet_link">
+      <inertial>
+        <origin xyz="-9.3E-05 0.000132 -0.022905" rpy="0 0 0" />
+        <mass value="0.364" />
+        <inertia ixx="0.000214" ixy="0" ixz="1E-06" iyy="0.000223" iyz="-2E-06" izz="0.00024" />
+      </inertial>
+    </link>
+    <joint
+      name="arm_joint_7"
+      type="continuous">
+      <origin xyz="0 -0.10593 -0.00017505" rpy="-1.5708 -5.5511E-17 9.6396E-17" />
+      <parent
+        link="arm_spherical_wrist_2_link" />
+      <child
+        link="arm_bracelet_link" />
+      <axis
+        xyz="0 0 1" />
+      <limit
+        effort="9"
+        velocity="1.2218" />
+    </joint>
+    <link name="arm_end_effector_link" />
+    <joint
+      name="arm_end_effector"
+      type="fixed">
+      <origin xyz="0 0 -0.0615250000000001" rpy="3.14159265358979 1.09937075168372E-32 0" />
+      <parent
+        link="arm_bracelet_link" />
+      <child
+        link="arm_end_effector_link" />
+      <axis
+        xyz="0 0 0" />
+    </joint>
+</robot>
+

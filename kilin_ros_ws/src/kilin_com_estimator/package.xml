@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>kilin_com_estimator</name>
+  <version>0.1.0</version>
+  <description>URDF-based COM and nominal wheel-point estimator for Kilin hardware.</description>
+  <maintainer email="ian@example.com">Ian</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>ament_index_cpp</depend>
+  <depend>eigen3_cmake_module</depend>
+  <depend>geometry_msgs</depend>
+  <depend>kilin_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>urdf</depend>
+  <exec_depend>kilin_robot_description</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
