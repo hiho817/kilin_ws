@@ -13,10 +13,14 @@
   <depend>kinova_ptp_interfaces</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_action</depend>
+  <depend>std_srvs</depend>
 
   <build_depend>libgpiod-dev</build_depend>
   <exec_depend>libgpiod2</exec_depend>
   <exec_depend>kinova_joint_ptp</exec_depend>
+  <exec_depend>kilin_com_estimator</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>

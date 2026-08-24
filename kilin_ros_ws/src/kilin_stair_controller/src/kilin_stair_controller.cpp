@@ -25,11 +25,13 @@
 #include "kilin_msgs/msg/motor_cmd_stamped.hpp"
 #include "kilin_msgs/msg/stability_state_stamped.hpp"
 #include "kilin_msgs/msg/stair_phase_stamped.hpp"
+#include "kilin_msgs/msg/stair_terrain_stamped.hpp"
 #include "kilin_msgs/msg/trigger_stamped.hpp"
 #include "kilin_stair_controller/support_geometry.hpp"
 #include "kinova_ptp_interfaces/action/joint_ptp.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 namespace
 {
@@ -48,6 +50,9 @@ struct GaitPoint
   double c_hip_pos{}, c_steer_pos{}, c_hub_vel{}, c_hub_mode{};
   double d_hip_pos{}, d_steer_pos{}, d_hub_vel{}, d_hub_mode{};
   int arm_phase{0};
+  double stair_rise_m{0.0};
+  std::array<int, 4> tread_level{{0, 0, 0, 0}};
+  std::array<bool, 4> supported{{true, true, true, true}};
 };
 }  // namespace
 
@@ -70,7 +75,12 @@ public:
     declare_parameter<std::string>("arm_control_mode", "fixed_phase");
     declare_parameter<std::string>("balance_state_topic", "/kilin/balance_state");
     declare_parameter<std::string>("stability_state_topic", "/kilin/stability_state");
+    declare_parameter<std::string>("terrain_state_topic", "/kilin/stair_terrain");
+    declare_parameter<std::string>("command_topic", "/kilin/motor_cmd_raw");
+    declare_parameter<bool>("require_start_service", false);
+    declare_parameter<bool>("require_command_subscriber", false);
     declare_parameter<double>("balance_state_timeout_sec", 0.5);
+    declare_parameter<bool>("require_balance_orientation", false);
     declare_parameter<double>("com_safe_margin_m", 0.01);
     declare_parameter<double>("com_alpha_step", 0.05);
     declare_parameter<double>("com_safe_hold_sec", 0.3);
@@ -106,7 +116,12 @@ public:
     closed_loop_arm_ = arm_control_mode_ == "com_closed_loop";
     balance_state_topic_ = get_parameter("balance_state_topic").as_string();
     stability_state_topic_ = get_parameter("stability_state_topic").as_string();
+    terrain_state_topic_ = get_parameter("terrain_state_topic").as_string();
+    command_topic_ = get_parameter("command_topic").as_string();
+    require_start_service_ = get_parameter("require_start_service").as_bool();
+    require_command_subscriber_ = get_parameter("require_command_subscriber").as_bool();
     balance_state_timeout_sec_ = get_parameter("balance_state_timeout_sec").as_double();
+    require_balance_orientation_ = get_parameter("require_balance_orientation").as_bool();
     com_safe_margin_m_ = get_parameter("com_safe_margin_m").as_double();
     com_alpha_step_ = get_parameter("com_alpha_step").as_double();
     com_safe_hold_sec_ = get_parameter("com_safe_hold_sec").as_double();
@@ -153,19 +168,34 @@ public:
       throw std::runtime_error("Failed to load CSV file: " + csv_path_);
     }
 
-    motor_pub_ = create_publisher<kilin_msgs::msg::MotorCmdStamped>("/kilin/motor_cmd_raw", 10);
+    motor_pub_ = create_publisher<kilin_msgs::msg::MotorCmdStamped>(command_topic_, 10);
     arm_client_ = rclcpp_action::create_client<JointPtp>(this, arm_action_name_);
     auto trigger_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
     trigger_pub_ = create_publisher<kilin_msgs::msg::TriggerStamped>("/kilin/trigger", trigger_qos);
     phase_pub_ = create_publisher<kilin_msgs::msg::StairPhaseStamped>(
       "/kilin/stair_phase", trigger_qos);
+    terrain_pub_ = create_publisher<kilin_msgs::msg::StairTerrainStamped>(
+      terrain_state_topic_, trigger_qos);
     stability_pub_ = create_publisher<kilin_msgs::msg::StabilityStateStamped>(
       stability_state_topic_, 10);
     balance_sub_ = create_subscription<kilin_msgs::msg::BalanceStateStamped>(
       balance_state_topic_, 10,
       std::bind(&KilinStairController::balance_state_callback, this, std::placeholders::_1));
+    start_service_ = create_service<std_srvs::srv::Trigger>(
+      "/kilin/start_stair",
+      std::bind(
+        &KilinStairController::start_callback, this,
+        std::placeholders::_1, std::placeholders::_2));
+    stop_service_ = create_service<std_srvs::srv::Trigger>(
+      "/kilin/stop_stair",
+      std::bind(
+        &KilinStairController::stop_callback, this,
+        std::placeholders::_1, std::placeholders::_2));
 
     start_time_ = get_clock()->now();
+    start_requested_ = !require_start_service_;
+    active_terrain_point_ = gait_.front();
+    active_terrain_sequence_ = csv_has_terrain_ ? 1U : 0U;
     timer_ = rclcpp::create_timer(
       this, get_clock(), std::chrono::microseconds(static_cast<int64_t>(1e6 / rate_hz_)),
       std::bind(&KilinStairController::update, this));
@@ -174,9 +204,21 @@ public:
       get_logger(), "Loaded %zu stair gait points from %s", gait_.size(),
       csv_path_.c_str());
     RCLCPP_INFO(
+      get_logger(), "Motor output: %s; terrain metadata: %s", command_topic_.c_str(),
+      csv_has_terrain_ ? terrain_state_topic_.c_str() : "absent");
+    if (closed_loop_arm_ && !use_sim_time && !csv_has_terrain_) {
+      throw std::runtime_error(
+              "hardware com_closed_loop requires a CSV generated with "
+              "--with-terrain-metadata");
+    }
+    RCLCPP_INFO(
       get_logger(), "Mode uses %s time. Arm phases: %s. Playback starts in %.1f seconds.",
       use_sim_time ? "simulation" : "system",
       csv_has_arm_phase_ && arm_enabled_ ? "enabled" : "disabled", delay_start_sec_);
+    if (require_start_service_) {
+      RCLCPP_WARN(
+        get_logger(), "Armed gate enabled: call /kilin/start_stair after preflight checks.");
+    }
     RCLCPP_INFO(
       get_logger(), "Module A/B hip inversion: %s", invert_ab_hips_ ? "enabled" : "disabled");
     RCLCPP_INFO(
@@ -216,6 +258,7 @@ private:
       return false;
     }
     csv_has_arm_phase_ = line.find("arm_phase") != std::string::npos;
+    csv_has_terrain_ = line.find("stair_rise_m") != std::string::npos;
 
     std::size_t line_number = 1;
     while (std::getline(file, line)) {
@@ -231,7 +274,13 @@ private:
           values.push_back(std::stod(cell));
         }
 
-        const std::size_t data_columns = values.size() - (csv_has_arm_phase_ ? 1U : 0U);
+        const std::size_t metadata_columns =
+          (csv_has_arm_phase_ ? 1U : 0U) + (csv_has_terrain_ ? 9U : 0U);
+        if (values.size() < metadata_columns) {
+          RCLCPP_ERROR(get_logger(), "CSV line %zu has too few columns.", line_number);
+          return false;
+        }
+        const std::size_t data_columns = values.size() - metadata_columns;
         if (data_columns != 13 && data_columns != 17) {
           RCLCPP_ERROR(
             get_logger(), "CSV line %zu has %zu gait columns; expected 13 or 17.",
@@ -256,10 +305,31 @@ private:
           values, k, has_steering, point.d_hip_pos, point.d_steer_pos,
           point.d_hub_vel, point.d_hub_mode);
         if (csv_has_arm_phase_) {
-          point.arm_phase = static_cast<int>(std::lround(values[k]));
+          point.arm_phase = static_cast<int>(std::lround(values[k++]));
           if (point.arm_phase < 0 || point.arm_phase > 4) {
             RCLCPP_ERROR(
               get_logger(), "CSV line %zu has invalid arm_phase %d.", line_number, point.arm_phase);
+            return false;
+          }
+        }
+        if (csv_has_terrain_) {
+          point.stair_rise_m = values[k++];
+          if (!std::isfinite(point.stair_rise_m) || point.stair_rise_m <= 0.0) {
+            RCLCPP_ERROR(get_logger(), "CSV line %zu has invalid stair rise.", line_number);
+            return false;
+          }
+          for (std::size_t leg = 0; leg < 4; ++leg) {
+            point.tread_level[leg] = static_cast<int>(std::lround(values[k++]));
+            if (point.tread_level[leg] < 0) {
+              RCLCPP_ERROR(get_logger(), "CSV line %zu has a negative tread level.", line_number);
+              return false;
+            }
+          }
+          for (std::size_t leg = 0; leg < 4; ++leg) {
+            point.supported[leg] = std::lround(values[k++]) != 0;
+          }
+          if (std::count(point.supported.begin(), point.supported.end(), true) < 3) {
+            RCLCPP_ERROR(get_logger(), "CSV line %zu has fewer than three supports.", line_number);
             return false;
           }
         }
@@ -316,7 +386,11 @@ private:
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "Waiting for a valid clock.");
       return;
     }
+    publish_terrain_state(active_terrain_point_);
     if (!started_) {
+      if (!start_requested_) {
+        return;
+      }
       if ((now - start_time_).seconds() < delay_start_sec_) {
         return;
       }
@@ -333,6 +407,7 @@ private:
         last_motor_command_.header.time.nanosec = now.nanoseconds() % 1000000000;
         motor_pub_->publish(last_motor_command_);
       }
+      publish_terrain_state(active_terrain_point_);
       if (closed_loop_arm_ && active_arm_phase_ > 0 && arm_waypoints_.empty()) {
         prepare_closed_loop_waypoints();
         if (arm_waypoints_.empty() && !arm_reached_ &&
@@ -393,6 +468,7 @@ private:
     if (arm_control_enabled) {
       if (active_arm_phase_ < 0) {
         // Establish the first row exactly before commanding its arm pose.
+        set_active_terrain(p0);
         publish_motor_command(build_motor_command(p0.time, p0, p0));
         request_arm_phase(p0.arm_phase, now);
         return;
@@ -406,22 +482,112 @@ private:
         if (!last_motor_command_valid_) {
           publish_motor_command(build_motor_command(p0.time, p0, p0));
         }
+        set_active_terrain(p1);
         request_arm_phase(p1.arm_phase, now);
         return;
       }
     }
 
+    set_active_terrain(p1);
     publish_motor_command(build_motor_command(sample_time, p0, p1));
     if (playback_at_end) {
       finish("playback complete");
     }
   }
 
+  void start_callback(
+    [[maybe_unused]] const std_srvs::srv::Trigger::Request::SharedPtr request,
+    std_srvs::srv::Trigger::Response::SharedPtr response)
+  {
+    if (started_ || start_requested_) {
+      response->success = false;
+      response->message = "stair playback is already starting or running";
+      return;
+    }
+    if (require_command_subscriber_ && motor_pub_->get_subscription_count() == 0U) {
+      response->success = false;
+      response->message = "motor command topic has no subscriber";
+      return;
+    }
+    if (arm_enabled_ && !arm_client_->action_server_is_ready()) {
+      response->success = false;
+      response->message = "Kinova PTP action server is not ready";
+      return;
+    }
+    if (closed_loop_arm_) {
+      if (!have_balance_state_ ||
+        (get_clock()->now() - last_balance_receive_time_).seconds() > balance_state_timeout_sec_)
+      {
+        response->success = false;
+        response->message = "balance state is missing or stale";
+        return;
+      }
+      if (require_balance_orientation_ && !latest_balance_state_.orientation_valid) {
+        response->success = false;
+        response->message = "balance state has no valid base orientation";
+        return;
+      }
+      if (csv_has_terrain_ &&
+        latest_balance_state_.terrain_seq != static_cast<int32_t>(active_terrain_sequence_))
+      {
+        response->success = false;
+        response->message = "balance state has not processed the active terrain metadata";
+        return;
+      }
+    }
+    start_time_ = get_clock()->now();
+    start_requested_ = true;
+    response->success = true;
+    response->message = "preflight passed; playback delay started";
+    RCLCPP_WARN(
+      get_logger(), "Start accepted; stair playback begins in %.1f seconds.", delay_start_sec_);
+  }
+
+  void stop_callback(
+    [[maybe_unused]] const std_srvs::srv::Trigger::Request::SharedPtr request,
+    std_srvs::srv::Trigger::Response::SharedPtr response)
+  {
+    response->success = true;
+    response->message = "stair controller stopping";
+    finish("stop service requested");
+  }
+
   void publish_motor_command(const kilin_msgs::msg::MotorCmdStamped & command)
   {
+    publish_terrain_state(active_terrain_point_);
     motor_pub_->publish(command);
     last_motor_command_ = command;
     last_motor_command_valid_ = true;
+  }
+
+  void set_active_terrain(const GaitPoint & point)
+  {
+    const bool changed = !csv_has_terrain_ ||
+      point.stair_rise_m != active_terrain_point_.stair_rise_m ||
+      point.tread_level != active_terrain_point_.tread_level ||
+      point.supported != active_terrain_point_.supported;
+    active_terrain_point_ = point;
+    if (csv_has_terrain_ && changed) {
+      ++active_terrain_sequence_;
+    }
+  }
+
+  void publish_terrain_state(const GaitPoint & point)
+  {
+    if (!csv_has_terrain_) {
+      return;
+    }
+    kilin_msgs::msg::StairTerrainStamped msg;
+    msg.header.seq = active_terrain_sequence_;
+    const auto stamp = get_clock()->now().nanoseconds();
+    msg.header.time.sec = static_cast<int32_t>(stamp / 1000000000LL);
+    msg.header.time.nanosec = static_cast<uint32_t>(stamp % 1000000000LL);
+    msg.header.frame_id = "stair_map";
+    msg.valid = true;
+    msg.stair_rise_m = point.stair_rise_m;
+    msg.tread_level = point.tread_level;
+    msg.supported = point.supported;
+    terrain_pub_->publish(msg);
   }
 
   kilin_msgs::msg::MotorCmdStamped build_motor_command(
@@ -590,12 +756,34 @@ private:
       return true;
     }
 
-    const double cosine = std::cos(amr_yaw_in_world_rad_);
-    const double sine = std::sin(amr_yaw_in_world_rad_);
-    const double direction_amr_x =
-      cosine * stability->direction.x + sine * stability->direction.y;
-    const double direction_amr_y =
-      -sine * stability->direction.x + cosine * stability->direction.y;
+    double direction_amr_x = 0.0;
+    double direction_amr_y = 0.0;
+    if (latest_balance_state_.orientation_valid) {
+      // base_to_output_rotation maps base vectors to the gravity-aligned
+      // estimator frame. Apply its inverse to bring the horizontal correction
+      // direction back into the physical Kinova/base XY plane.
+      const auto & q = latest_balance_state_.base_to_output_rotation;
+      const double norm = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+      if (!std::isfinite(norm) || norm < 1e-9) {
+        throw std::runtime_error("balance orientation quaternion is invalid");
+      }
+      const double x = q.x / norm;
+      const double y = q.y / norm;
+      const double z = q.z / norm;
+      const double w = q.w / norm;
+      // Transpose of the quaternion rotation matrix (output -> base).
+      direction_amr_x =
+        (1.0 - 2.0 * (y * y + z * z)) * stability->direction.x +
+        (2.0 * (x * y + z * w)) * stability->direction.y;
+      direction_amr_y =
+        (2.0 * (x * y - z * w)) * stability->direction.x +
+        (1.0 - 2.0 * (x * x + z * z)) * stability->direction.y;
+    } else {
+      const double cosine = std::cos(amr_yaw_in_world_rad_);
+      const double sine = std::sin(amr_yaw_in_world_rad_);
+      direction_amr_x = cosine * stability->direction.x + sine * stability->direction.y;
+      direction_amr_y = -sine * stability->direction.x + cosine * stability->direction.y;
+    }
     double target_j1 = kilin_stair_controller::geometry::arm_joint1_for_direction(
       {direction_amr_x, direction_amr_y}, arm_base_yaw_offset_rad_);
     const double reference_j1 = held_arm_pose_[0];
@@ -635,6 +823,21 @@ private:
     bool require_recent)
   {
     if (!have_balance_state_) {
+      return std::nullopt;
+    }
+    if (require_balance_orientation_ && !latest_balance_state_.orientation_valid) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Rejecting balance state without a measured/known-terrain base orientation");
+      return std::nullopt;
+    }
+    if (csv_has_terrain_ &&
+      latest_balance_state_.terrain_seq != static_cast<int32_t>(active_terrain_sequence_))
+    {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Waiting for balance estimator terrain sequence %u (received %d)",
+        active_terrain_sequence_, latest_balance_state_.terrain_seq);
       return std::nullopt;
     }
     if (require_recent &&
@@ -1017,10 +1220,26 @@ private:
     }
     finished_ = true;
     cancel_active_arm_goal();
+    publish_safe_motor_stop();
     trigger_off();
     publish_trigger(false);
     RCLCPP_INFO(get_logger(), "Stair controller stopped: %s", reason);
     rclcpp::shutdown();
+  }
+
+  void publish_safe_motor_stop()
+  {
+    if (!last_motor_command_valid_) {
+      return;
+    }
+    auto stop = last_motor_command_;
+    fill_header(stop);
+    for (auto * leg : {&stop.module_a, &stop.module_b, &stop.module_c, &stop.module_d}) {
+      leg->hub.velocity = 0.0;
+      leg->hub.motor_mode = 5;
+    }
+    motor_pub_->publish(stop);
+    RCLCPP_WARN(get_logger(), "Published zero hub velocity before shutdown.");
   }
 
   std::vector<GaitPoint> gait_;
@@ -1034,8 +1253,13 @@ private:
   std::string arm_control_mode_;
   std::string balance_state_topic_;
   std::string stability_state_topic_;
+  std::string terrain_state_topic_;
+  std::string command_topic_;
+  bool require_start_service_{false};
+  bool require_command_subscriber_{false};
   bool closed_loop_arm_{false};
   double balance_state_timeout_sec_{};
+  bool require_balance_orientation_{false};
   double com_safe_margin_m_{};
   double com_alpha_step_{};
   double com_safe_hold_sec_{};
@@ -1049,13 +1273,17 @@ private:
   std::size_t active_arm_waypoint_{0};
   std::vector<double> pending_arm_target_;
   bool csv_has_arm_phase_{false};
+  bool csv_has_terrain_{false};
   bool invert_ab_hips_{false};
 
   rclcpp::Publisher<kilin_msgs::msg::MotorCmdStamped>::SharedPtr motor_pub_;
   rclcpp::Publisher<kilin_msgs::msg::TriggerStamped>::SharedPtr trigger_pub_;
   rclcpp::Publisher<kilin_msgs::msg::StairPhaseStamped>::SharedPtr phase_pub_;
+  rclcpp::Publisher<kilin_msgs::msg::StairTerrainStamped>::SharedPtr terrain_pub_;
   rclcpp::Publisher<kilin_msgs::msg::StabilityStateStamped>::SharedPtr stability_pub_;
   rclcpp::Subscription<kilin_msgs::msg::BalanceStateStamped>::SharedPtr balance_sub_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_service_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_service_;
   rclcpp_action::Client<JointPtp>::SharedPtr arm_client_;
   JointPtpGoalHandle::SharedPtr active_arm_goal_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -1067,6 +1295,7 @@ private:
   rclcpp::Time last_balance_receive_time_;
   rclcpp::Time safe_hold_start_time_;
   bool started_{false};
+  bool start_requested_{false};
   bool waiting_for_arm_{false};
   bool arm_reached_{false};
   bool arm_goal_sent_{false};
@@ -1082,9 +1311,11 @@ private:
   int previous_arm_phase_{-1};
   uint32_t sequence_{0};
   uint32_t phase_sequence_{0};
+  uint32_t active_terrain_sequence_{0};
   kilin_msgs::msg::MotorCmdStamped last_motor_command_;
   bool last_motor_command_valid_{false};
   kilin_msgs::msg::BalanceStateStamped latest_balance_state_;
+  GaitPoint active_terrain_point_;
 
   std::string trigger_chipname_;
   unsigned int trigger_line_offset_{112};

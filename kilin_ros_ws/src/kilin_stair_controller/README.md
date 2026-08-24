@@ -70,10 +70,10 @@ margin is at least `com_safe_margin_m` for `com_safe_hold_sec` continuously. If
 full extension is still unsafe, missing/stale geometry exceeds the timeout, or a
 PTP goal fails, playback stops.
 
-The input positions and COM are currently expected in the world frame.
-`amr_yaw_in_world_deg` rotates the world correction into the AMR frame before J1
-is selected. Keep it at zero while AMR +X and world +X are aligned; update it if
-the robot begins with a nonzero heading.
+In simulation, input positions and COM are expected in the world frame.
+`amr_yaw_in_world_deg` rotates that world correction into the AMR frame before
+J1 is selected. Keep it at zero while AMR +X and world +X are aligned. Hardware
+instead uses the orientation quaternion described below.
 
 `arm_base_yaw_offset_deg` then rotates the AMR-frame correction into the Kinova
 base mounting frame. Use `0.0` when Kinova base +X points toward AMR +X, as in
@@ -81,6 +81,14 @@ the current simulation. Use `180.0` on hardware when the Kinova base is mounted
 backward, so an AMR-forward correction commands J1 to 180 degrees. This mounting
 offset is independent of `amr_yaw_in_world_deg`; do not use the AMR heading
 parameter to compensate for the arm installation.
+
+On no-IMU hardware, generate the CSV with `--with-terrain-metadata`. The added
+columns contain stair rise, tread indices, and the current three/four-wheel
+support mask. `kilin_com_estimator` uses these values to publish gravity-aligned
+COM geometry and a base-to-output quaternion. When that quaternion is valid,
+the controller transforms the horizontal correction back into the physical
+base/arm XY plane before selecting Kinova J1. Hardware configuration sets
+`require_balance_orientation: true`; an assumed-level balance state is rejected.
 
 Hardware configuration for the backward-mounted base:
 
@@ -173,6 +181,7 @@ ros2 run kilin_stair_controller generate_stair_csv \
   --center-to-first-riser 0.63 \
   --middle-cycles 1 \
   --include-stage3 \
+  --with-terrain-metadata \
   --output ~/kilin_ws/csv/generated/stair_35_10_full.csv
 ```
 
@@ -207,6 +216,7 @@ Isaac Sim joint positions therefore remain in radians.
 
 - Publishes `/kilin/motor_cmd_raw` (`kilin_msgs/msg/MotorCmdStamped`)
 - Publishes `/kilin/trigger` (`kilin_msgs/msg/TriggerStamped`)
+- Publishes `/kilin/stair_terrain` (`kilin_msgs/msg/StairTerrainStamped`)
 - Subscribes `/kilin/balance_state` (`kilin_msgs/msg/BalanceStateStamped`)
 - Publishes `/kilin/stability_state` (`kilin_msgs/msg/StabilityStateStamped`)
 - Uses `/kinova_joint_ptp` (`kinova_ptp_interfaces/action/JointPtp`) as an action client
@@ -245,11 +255,33 @@ ros2 launch kilin_stair_controller launch.py \
   ptp_warmup_sec:=3.0
 ```
 
-Real robot:
+Real robot uses the integrated launch, which starts the COM estimator, Kinova
+PTP server, and gated stair controller. The hardware controller publishes to
+`/kilin/motor_cmd_raw`; put `kilin_panel` in Manual mode so it forwards those
+commands to `/motor/command`. Do not run another raw-command publisher at the
+same time.
 
 ```bash
-ros2 launch kilin_stair_controller launch.py use_sim_time:=false csv_name:=stairs.csv
+ros2 launch kilin_stair_controller hardware_stair.launch.py \
+  csv_path:=$HOME/kilin_ws/csv/stairs_v3/stair_35_10_hardware.csv
 ```
+
+Launching does not move the robot. Verify fresh inputs and gravity-aligned
+output, then explicitly start:
+
+```bash
+ros2 topic hz /motor/state
+ros2 topic hz /joint_states
+ros2 topic echo /kilin/stair_terrain --once
+ros2 topic echo /kilin/balance_state --once
+ros2 service call /kilin/start_stair std_srvs/srv/Trigger "{}"
+```
+
+The start service rejects a missing `/kilin/motor_cmd_raw` subscriber (the
+panel forwarder), unavailable
+Kinova PTP, stale balance data, and invalid base orientation. Stop with
+`ros2 service call /kilin/stop_stair std_srvs/srv/Trigger "{}"` or Ctrl-C; the
+controller publishes zero hub velocity before shutdown.
 
 If a JointPtp server is already running, prevent a duplicate action server with:
 
@@ -271,9 +303,9 @@ package rebuild. Use `config_dir` only when loading a file from another folder.
 The package config remains the version-controlled reference; after pose values
 are finalized, copy the accepted values back to it.
 
-When `use_sim_time` is `false`, module A and B hip commands are inverted to match
-the physical motor mounting direction; module C and D are unchanged. Simulation
-does not apply this inversion. Set `invert_ab_hips_on_hardware:=false` in the
-configuration only when testing hardware with an already corrected CSV.
+The current hardware was verified with all four physical hips at zero and no
+A/B sign mismatch. Its configuration therefore sets
+`invert_ab_hips_on_hardware: false`. The parameter remains available only for
+older hardware wiring that still requires command-side A/B inversion.
 
-Only one node that publishes `/kilin/motor_cmd_raw` should run at a time.
+Only one node should publish the selected motor command topic at a time.

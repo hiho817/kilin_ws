@@ -25,6 +25,7 @@ set(msg_files
   "msg/TriggerStamped.msg"
   "msg/BalanceStateStamped.msg"
   "msg/StairPhaseStamped.msg"
+  "msg/StairTerrainStamped.msg"
   "msg/StabilityStateStamped.msg"
   "msg/TerrainWindow.msg"
 )

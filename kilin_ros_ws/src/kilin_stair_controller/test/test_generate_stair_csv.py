@@ -323,6 +323,28 @@ class GenerateStairCsvTest(unittest.TestCase):
                 generator.write_csv(rows, output)
             generator.write_csv(rows, output, force=True)
 
+    def test_hardware_metadata_tracks_three_step_tread_transfers(self):
+        rows = generator.generate_gait(middle_cycles=1, include_stage3=True)
+        self.assertEqual((0, 0, 0, 0), rows[0].tread_levels)
+        self.assertEqual((1, 2, 0, 0), rows[17].tread_levels)
+        self.assertEqual((2, 3, 1, 1), rows[27].tread_levels)
+        self.assertEqual((3, 3, 2, 2), rows[34].tread_levels)
+        self.assertEqual((3, 3, 3, 3), rows[-1].tread_levels)
+        self.assertEqual((True, False, True, True), rows[2].supported)
+        self.assertEqual((False, True, True, True), rows[22].supported)
+
+    def test_hardware_csv_appends_terrain_columns_without_changing_gait(self):
+        rows = generator.generate_gait(middle_cycles=1, include_stage3=True)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "hardware.csv"
+            generator.write_csv(rows, output, terrain_rise_m=0.10)
+            with output.open(newline="", encoding="utf-8") as stream:
+                data = list(csv.reader(stream))
+        self.assertEqual(27, len(data[0]))
+        self.assertEqual("stair_rise_m", data[0][18])
+        self.assertEqual("0.1", data[1][18])
+        self.assertEqual(["3", "3", "3", "3"], data[-1][19:23])
+
 
 if __name__ == "__main__":
     unittest.main()

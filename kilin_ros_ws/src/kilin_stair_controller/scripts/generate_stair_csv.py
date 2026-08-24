@@ -26,6 +26,11 @@ CSV_HEADER = (
     "d_hip_pos", "d_steering_pos", "d_hub_vel", "d_hub_mode",
     "arm_phase",
 )
+TERRAIN_HEADER = (
+    "stair_rise_m",
+    "a_tread_level", "b_tread_level", "c_tread_level", "d_tread_level",
+    "a_supported", "b_supported", "c_supported", "d_supported",
+)
 
 VALIDATED_RISE_M = 0.10
 VALIDATED_RUN_M = 0.35
@@ -108,6 +113,8 @@ class GaitRow:
     hub_velocity: tuple[float, float, float, float]
     hub_mode: tuple[int, int, int, int]
     arm_phase: int
+    tread_levels: tuple[int, int, int, int] = (0, 0, 0, 0)
+    supported: tuple[bool, bool, bool, bool] = (True, True, True, True)
 
     def csv_values(self) -> list[float | int]:
         values: list[float | int] = [self.time]
@@ -579,8 +586,98 @@ def generate_gait(
     rows = _retime_hub_only_segments(
         rows, rise_m, run_m, center_to_first_riser_m, drive_scale
     )
+    rows = annotate_terrain(rows, middle_cycles, include_stage3)
     validate_gait(rows)
     return rows
+
+
+def annotate_terrain(
+    rows: Sequence[GaitRow], middle_cycles: int, include_stage3: bool
+) -> list[GaitRow]:
+    """
+    Attach the known tread level and support mask to every gait target.
+
+    Metadata on a row describes the motion arriving at that row.  A swinging
+    wheel is therefore marked unsupported on its landing target, and becomes
+    supported (at the new tread level) on the following row.  This matches the
+    controller's existing target-row arm-phase semantics.
+    """
+    expected = 18 + 10 * middle_cycles + (13 if include_stage3 else 0)
+    if len(rows) != expected:
+        raise ValueError(
+            f"terrain annotation expected {expected} rows, received {len(rows)}"
+        )
+
+    annotated: list[GaitRow] = []
+    levels = [0, 0, 0, 0]
+
+    def add(row: GaitRow, swing: int | None = None, land: int | None = None) -> None:
+        if land is not None:
+            levels[land] += 1
+        support = [True, True, True, True]
+        if swing is not None:
+            support[swing] = False
+        annotated.append(
+            replace(
+                row,
+                tread_levels=tuple(levels),
+                supported=tuple(support),
+            )
+        )
+
+    # Entry: FR 0->1, FL 0->1, FR 1->2.  The final FL phase is an
+    # unloading/preload motion and does not change its tread.
+    entry_actions: dict[int, tuple[int | None, int | None]] = {
+        2: (1, None), 3: (1, None), 4: (1, None), 5: (1, None),
+        6: (None, 1),
+        7: (0, None), 8: (None, 0),
+        10: (1, None), 11: (1, None), 12: (1, None), 13: (1, None),
+        14: (None, 1),
+        15: (0, None),
+    }
+    for index, row in enumerate(rows[:18]):
+        swing, land = entry_actions.get(index, (None, None))
+        add(row, swing, land)
+
+    cursor = 18
+    for _ in range(middle_cycles):
+        cycle = rows[cursor:cursor + 10]
+        # RR, RL, FL, and FR each advance by one tread.
+        actions = {
+            0: (3, None), 1: (None, 3),
+            2: (2, None), 3: (None, 2),
+            4: (0, None), 5: (None, 0),
+            7: (1, None), 8: (None, 1),
+        }
+        for index, row in enumerate(cycle):
+            swing, land = actions.get(index, (None, None))
+            add(row, swing, land)
+        cursor += 10
+
+    if include_stage3:
+        final_approach = rows[cursor:cursor + 7]
+        actions = {
+            0: (3, None), 1: (None, 3),
+            2: (2, None), 3: (None, 2),
+            4: (0, None), 5: (None, 0),
+        }
+        for index, row in enumerate(final_approach):
+            swing, land = actions.get(index, (None, None))
+            add(row, swing, land)
+        cursor += 7
+
+        stage3 = rows[cursor:cursor + 6]
+        actions = {
+            3: (3, None),
+            # RR has landed when the controller changes from phase 4 to 3.
+            4: (2, 3),
+            5: (None, 2),
+        }
+        for index, row in enumerate(stage3):
+            swing, land = actions.get(index, (None, None))
+            add(row, swing, land)
+
+    return annotated
 
 
 def validate_gait(rows: Sequence[GaitRow]) -> None:
@@ -611,16 +708,24 @@ def _format_number(value: float | int) -> str:
     return format(numeric, ".12g")
 
 
-def write_csv(rows: Iterable[GaitRow], output_path: Path, force: bool = False) -> None:
+def write_csv(
+    rows: Iterable[GaitRow], output_path: Path, force: bool = False,
+    terrain_rise_m: float | None = None,
+) -> None:
     output_path = output_path.expanduser().resolve()
     if output_path.exists() and not force:
         raise FileExistsError(f"refusing to overwrite existing file: {output_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream, lineterminator="\n")
-        writer.writerow(CSV_HEADER)
+        writer.writerow(CSV_HEADER + (TERRAIN_HEADER if terrain_rise_m is not None else ()))
         for row in rows:
             values = row.csv_values()
+            if terrain_rise_m is not None:
+                values.extend(
+                    [terrain_rise_m, *row.tread_levels,
+                     *(int(value) for value in row.supported)]
+                )
             formatted = [_format_number(value) for value in values]
             if row.time == 0.0:
                 formatted[0] = "0.0"
@@ -661,6 +766,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--output", type=Path, required=True, help="output CSV path")
     parser.add_argument("--force", action="store_true", help="overwrite an existing output file")
+    parser.add_argument(
+        "--with-terrain-metadata",
+        action="store_true",
+        help=(
+            "append stair rise, per-wheel tread levels, and support masks for "
+            "the no-IMU hardware COM estimator"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -675,7 +788,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.include_stage3,
             args.drive_scale,
         )
-        write_csv(rows, args.output, args.force)
+        write_csv(
+            rows, args.output, args.force,
+            args.rise if args.with_terrain_metadata else None,
+        )
     except (ValueError, OSError) as error:
         raise SystemExit(f"error: {error}") from error
     angles = calculate_geometry_angles(args.rise, args.run)

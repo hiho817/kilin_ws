@@ -1,0 +1,41 @@
+kilin_stair_controller:
+  ros__parameters:
+    rate_hz: 100.0
+    delay_start_sec: 3.0
+    arm_enabled: true
+    arm_timeout_sec: 18.0
+    arm_ptp_duration_sec: 3.0
+    arm_action_name: /kinova_joint_ptp
+    arm_control_mode: com_closed_loop
+
+    balance_state_topic: /kilin/balance_state
+    stability_state_topic: /kilin/stability_state
+    terrain_state_topic: /kilin/stair_terrain
+    balance_state_timeout_sec: 0.5
+    require_balance_orientation: true
+
+    # Publish through the already validated Kilin panel forwarding path:
+    # stair controller -> /kilin/motor_cmd_raw -> panel -> /motor/command.
+    command_topic: /kilin/motor_cmd_raw
+    require_start_service: true
+    require_command_subscriber: true
+
+    com_safe_margin_m: 0.015
+    com_alpha_step: 0.05
+    com_safe_hold_sec: 0.3
+    amr_yaw_in_world_deg: 0.0
+
+    # Hardware Kinova base is mounted backward: J1=180 deg faces AMR forward.
+    arm_base_yaw_offset_deg: 180.0
+    standard_pose_deg: [180.0, -85.94, 0.0, 147.0, 0.0, 22.92, 0.0]
+    full_extension_pose_deg: [180.0, 90.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    front_left_pose_deg: [135.0, 90.0, 0.0, -40.0, 0.0, 90.0, 0.0]
+    front_right_pose_deg: [-135.0, 90.0, 0.0, -40.0, 0.0, 90.0, 0.0]
+    rear_left_pose_deg: [45.0, 100.0, 0.0, 0.0, 0.0, 90.0, 0.0]
+    rear_right_pose_deg: [-45.0, 90.0, 0.0, -40.0, 0.0, 90.0, 0.0]
+
+    # MotorState feedback was verified with all physical hips at zero; there
+    # is no A/B sign correction or hidden 40-deg feedback offset.
+    invert_ab_hips_on_hardware: false
+    trigger_chip: /dev/gpiochip0
+    trigger_line: 112

@@ -17,7 +17,11 @@ find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(urdf REQUIRED)
 
-add_library(robot_com_model src/robot_com_model.cpp src/joint_mapping.cpp)
+add_library(robot_com_model
+  src/robot_com_model.cpp
+  src/joint_mapping.cpp
+  src/terrain_orientation.cpp
+)
 target_compile_features(robot_com_model PUBLIC cxx_std_17)
 target_include_directories(
   robot_com_model PUBLIC
@@ -54,6 +58,14 @@ if(BUILD_TESTING)
   target_link_libraries(test_robot_com_model robot_com_model Eigen3::Eigen)
   target_compile_definitions(
     test_robot_com_model PRIVATE
+    TEST_URDF_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../kilin_robot_description/urdf/kilin_gen3_hardware.urdf"
+  )
+  ament_add_gtest(test_terrain_orientation test/test_terrain_orientation.cpp)
+  target_link_libraries(test_terrain_orientation robot_com_model Eigen3::Eigen)
+  ament_add_gtest(test_gait_terrain_consistency test/test_gait_terrain_consistency.cpp)
+  target_link_libraries(test_gait_terrain_consistency robot_com_model Eigen3::Eigen)
+  target_compile_definitions(
+    test_gait_terrain_consistency PRIVATE
     TEST_URDF_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../kilin_robot_description/urdf/kilin_gen3_hardware.urdf"
   )
 

@@ -1,5 +1,6 @@
 // Copyright 2026 Ian
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -15,11 +16,13 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <kilin_msgs/msg/balance_state_stamped.hpp>
 #include <kilin_msgs/msg/motor_state_stamped.hpp>
+#include <kilin_msgs/msg/stair_terrain_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 
 #include "kilin_com_estimator/joint_mapping.hpp"
 #include "kilin_com_estimator/robot_com_model.hpp"
+#include "kilin_com_estimator/terrain_orientation.hpp"
 
 namespace kilin_com_estimator
 {
@@ -47,6 +50,8 @@ public:
     declare_parameter<double>("input_timeout_sec", 0.5);
     declare_parameter<double>("wheel_radius_m", 0.0525);
     declare_parameter<bool>("assume_level_base", true);
+    declare_parameter<bool>("require_terrain_state", false);
+    declare_parameter<std::string>("terrain_state_topic", "/kilin/stair_terrain");
     declare_parameter<std::vector<std::string>>(
       "arm_input_joint_names", kDefaultInputArmJoints);
     declare_parameter<std::vector<std::string>>(
@@ -56,16 +61,16 @@ public:
     input_timeout_sec_ = get_parameter("input_timeout_sec").as_double();
     wheel_radius_m_ = get_parameter("wheel_radius_m").as_double();
     assume_level_base_ = get_parameter("assume_level_base").as_bool();
+    require_terrain_state_ = get_parameter("require_terrain_state").as_bool();
     input_arm_joint_names_ = get_parameter("arm_input_joint_names").as_string_array();
     urdf_arm_joint_names_ = get_parameter("arm_urdf_joint_names").as_string_array();
 
     if (publish_rate_hz <= 0.0 || input_timeout_sec_ <= 0.0 || wheel_radius_m_ <= 0.0) {
       throw std::invalid_argument("publish rate, timeout, and wheel radius must be positive");
     }
-    if (!assume_level_base_) {
+    if (!assume_level_base_ && !require_terrain_state_) {
       throw std::invalid_argument(
-              "this estimator version has no base-orientation source; "
-              "assume_level_base must remain true");
+              "assume_level_base=false requires require_terrain_state=true");
     }
     if (input_arm_joint_names_.size() != 7 || urdf_arm_joint_names_.size() != 7) {
       throw std::invalid_argument("exactly seven input and URDF Kinova joint names are required");
@@ -86,6 +91,7 @@ public:
     const auto motor_state_topic = get_parameter("motor_state_topic").as_string();
     const auto arm_joint_state_topic = get_parameter("arm_joint_state_topic").as_string();
     const auto balance_state_topic = get_parameter("balance_state_topic").as_string();
+    const auto terrain_state_topic = get_parameter("terrain_state_topic").as_string();
 
     motor_state_sub_ = create_subscription<kilin_msgs::msg::MotorStateStamped>(
       motor_state_topic, rclcpp::QoS(10),
@@ -93,6 +99,9 @@ public:
     arm_joint_state_sub_ = create_subscription<sensor_msgs::msg::JointState>(
       arm_joint_state_topic, rclcpp::QoS(10),
       std::bind(&KilinComEstimator::arm_joint_state_callback, this, std::placeholders::_1));
+    terrain_state_sub_ = create_subscription<kilin_msgs::msg::StairTerrainStamped>(
+      terrain_state_topic, rclcpp::QoS(1).reliable().transient_local(),
+      std::bind(&KilinComEstimator::terrain_state_callback, this, std::placeholders::_1));
     balance_state_pub_ = create_publisher<kilin_msgs::msg::BalanceStateStamped>(
       balance_state_topic, rclcpp::QoS(10));
 
@@ -105,10 +114,14 @@ public:
       "Hardware COM estimator ready: mass=%.4f kg, motor='%s', arm='%s', output='%s'",
       model_->model_mass(), motor_state_topic.c_str(), arm_joint_state_topic.c_str(),
       balance_state_topic.c_str());
-    RCLCPP_WARN(
-      get_logger(),
-      "No base orientation is available: output frame is base_link_assumed_level. "
-      "Use this version for flat-ground validation, not stair closed-loop control.");
+    if (require_terrain_state_) {
+      RCLCPP_INFO(
+        get_logger(), "Known-stair orientation input: %s", terrain_state_topic.c_str());
+    } else {
+      RCLCPP_WARN(
+        get_logger(),
+        "Terrain orientation is optional: output remains level-assumed until metadata arrives.");
+    }
   }
 
 private:
@@ -159,9 +172,26 @@ private:
     have_arm_state_ = true;
   }
 
+  void terrain_state_callback(const kilin_msgs::msg::StairTerrainStamped::SharedPtr msg)
+  {
+    if (!msg->valid || !std::isfinite(msg->stair_rise_m) || msg->stair_rise_m <= 0.0 ||
+      std::count(msg->supported.begin(), msg->supported.end(), true) < 3)
+    {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 1000, "Ignoring invalid stair terrain metadata");
+      return;
+    }
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    terrain_state_ = *msg;
+    last_terrain_receive_time_ = now();
+    have_terrain_state_ = true;
+  }
+
   void publish_estimate()
   {
     std::map<std::string, double> joint_positions;
+    kilin_msgs::msg::StairTerrainStamped terrain;
+    bool use_terrain = false;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       if (!have_motor_state_ || !have_arm_state_) {
@@ -177,6 +207,22 @@ private:
         RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 2000,
           "Estimator input stale: motor=%.3f s, arm=%.3f s", motor_age, arm_age);
+        return;
+      }
+      if (have_terrain_state_) {
+        const double terrain_age = (current_time - last_terrain_receive_time_).seconds();
+        if (terrain_age <= input_timeout_sec_) {
+          terrain = terrain_state_;
+          use_terrain = true;
+        } else if (require_terrain_state_) {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "Required stair terrain metadata is stale: %.3f s", terrain_age);
+          return;
+        }
+      } else if (require_terrain_state_) {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 2000, "Waiting for required stair terrain metadata");
         return;
       }
       joint_positions = hip_positions_;
@@ -197,14 +243,52 @@ private:
     const auto stamp_ns = now().nanoseconds();
     output.header.time.sec = static_cast<int32_t>(stamp_ns / 1000000000LL);
     output.header.time.nanosec = static_cast<uint32_t>(stamp_ns % 1000000000LL);
-    output.header.frame_id = "base_link_assumed_level";
-    output.com.x = estimate.com.x();
-    output.com.y = estimate.com.y();
-    output.com.z = estimate.com.z();
+    std::array<Eigen::Vector3d, 4> contact_points;
     for (std::size_t index = 0; index < estimate.wheel_centers.size(); ++index) {
-      output.contact_points[index].x = estimate.wheel_centers[index].x();
-      output.contact_points[index].y = estimate.wheel_centers[index].y();
-      output.contact_points[index].z = estimate.wheel_centers[index].z() - wheel_radius_m_;
+      // Tread-height differences are identical for wheel centers and contact
+      // points because every wheel has the same radius.  Solving from centers
+      // avoids assuming that base -Z is the gravity/contact direction.
+      contact_points[index] = estimate.wheel_centers[index];
+    }
+
+    Eigen::Matrix3d base_to_output = Eigen::Matrix3d::Identity();
+    output.orientation_valid = false;
+    output.terrain_seq = -1;
+    output.base_to_output_rotation.w = 1.0;
+    output.header.frame_id = "base_link_assumed_level";
+    if (use_terrain) {
+      const auto orientation = estimate_terrain_orientation(
+        contact_points, terrain.tread_level, terrain.supported,
+        terrain.stair_rise_m, previous_vertical_);
+      if (!orientation) {
+        RCLCPP_ERROR_THROTTLE(
+          get_logger(), *get_clock(), 1000,
+          "Known stair heights are inconsistent with the current wheel geometry");
+        return;
+      }
+      previous_vertical_ = orientation->vertical_in_base;
+      base_to_output = orientation->base_to_level;
+      const Eigen::Quaterniond quaternion(base_to_output);
+      output.orientation_valid = true;
+      output.terrain_seq = terrain.header.seq;
+      output.base_to_output_rotation.x = quaternion.x();
+      output.base_to_output_rotation.y = quaternion.y();
+      output.base_to_output_rotation.z = quaternion.z();
+      output.base_to_output_rotation.w = quaternion.w();
+      output.header.frame_id = "base_link_gravity_aligned";
+    }
+
+    const Eigen::Vector3d output_com = base_to_output * estimate.com;
+    output.com.x = output_com.x();
+    output.com.y = output_com.y();
+    output.com.z = output_com.z();
+    for (std::size_t index = 0; index < estimate.wheel_centers.size(); ++index) {
+      const Eigen::Vector3d output_point =
+        base_to_output * contact_points[index] -
+        Eigen::Vector3d(0.0, 0.0, wheel_radius_m_);
+      output.contact_points[index].x = output_point.x();
+      output.contact_points[index].y = output_point.y();
+      output.contact_points[index].z = output_point.z();
       output.sensor_valid[index] = false;
       output.in_contact[index] = false;
       output.supported[index] = false;
@@ -219,6 +303,7 @@ private:
   double input_timeout_sec_{0.5};
   double wheel_radius_m_{0.0525};
   bool assume_level_base_{true};
+  bool require_terrain_state_{false};
   uint32_t sequence_{0};
 
   std::mutex state_mutex_;
@@ -228,9 +313,14 @@ private:
   rclcpp::Time last_arm_receive_time_{0, 0, RCL_ROS_TIME};
   bool have_motor_state_{false};
   bool have_arm_state_{false};
+  bool have_terrain_state_{false};
+  kilin_msgs::msg::StairTerrainStamped terrain_state_;
+  rclcpp::Time last_terrain_receive_time_{0, 0, RCL_ROS_TIME};
+  std::optional<Eigen::Vector3d> previous_vertical_;
 
   rclcpp::Subscription<kilin_msgs::msg::MotorStateStamped>::SharedPtr motor_state_sub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr arm_joint_state_sub_;
+  rclcpp::Subscription<kilin_msgs::msg::StairTerrainStamped>::SharedPtr terrain_state_sub_;
   rclcpp::Publisher<kilin_msgs::msg::BalanceStateStamped>::SharedPtr balance_state_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };

@@ -11,18 +11,31 @@ Inputs:
   `position_diff = actual - position`.
 - `/joint_states`: Kinova positions are selected by `name[]`, not by message
   order. Extra joints such as `robotiq_85_left_knuckle_joint` are ignored.
+- `/kilin/stair_terrain`: the gait-synchronized stair rise, tread index, and
+  support mask for FL/FR/RL/RR.
 
 The first hardware version intentionally uses only measured hip and Kinova
 angles. Steering, wheel rotation, and the unsensed passive suspension joints
 remain at zero in the URDF.
 
-## No-IMU limitation
+## No-IMU known-stair orientation
 
-The robot currently has no hardware IMU. Therefore this version publishes in
-`base_link_assumed_level` and is valid for flat-ground estimator and arm-motion
-validation only. On stairs, base-frame XY is not the horizontal plane and the
-COM gravity projection will be wrong. Do not enable stair `com_closed_loop`
-from this estimator until a base-orientation source is added.
+The robot has no hardware IMU. For generated stair gaits, the controller now
+publishes the known tread height of every supporting wheel. From three supports
+the estimator solves
+
+`n dot (p_i - p_0) = (level_i - level_0) * stair_rise`
+
+with `|n|=1`, where `n` is world vertical expressed in `base_link`. The selected
+solution has positive Z and remains continuous with the previous estimate. COM
+and wheel points are rotated into `base_link_gravity_aligned`, and
+`base_to_output_rotation` carries the same transform back to the controller.
+
+This removes the flat-base assumption but does not measure contact. A missed
+tread, wheel slip, chassis flex, or wrong stair dimension cannot be detected
+without an IMU/contact sensor. The hardware controller therefore refuses to
+start without fresh terrain metadata and a valid orientation, but the first
+real run must still be supervised and restrained.
 
 Sensor contact fields are set to false/NaN because no hardware contact sensor
 source is connected. The balance monitor and stair controller use the nominal
@@ -50,5 +63,9 @@ Verify that both inputs are fresh and the estimator is publishing:
 ros2 topic hz /motor/state
 ros2 topic hz /joint_states
 ros2 topic hz /kilin/balance_state
+ros2 topic echo /kilin/stair_terrain --once
 ros2 topic echo /kilin/balance_state --once
 ```
+
+For stair use, `header.frame_id` must be `base_link_gravity_aligned` and
+`orientation_valid` must be `true`.

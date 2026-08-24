@@ -11,6 +11,7 @@ find_package(kilin_msgs REQUIRED)
 find_package(kinova_ptp_interfaces REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
+find_package(std_srvs REQUIRED)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBGPIOD REQUIRED libgpiod)
@@ -24,6 +25,7 @@ ament_target_dependencies(kilin_stair_controller
   kinova_ptp_interfaces
   rclcpp
   rclcpp_action
+  std_srvs
 )
 
 target_include_directories(kilin_stair_controller PRIVATE ${LIBGPIOD_INCLUDE_DIRS})
