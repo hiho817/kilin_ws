@@ -5,3 +5,9 @@
 [submodule "kilin_ros_ws/src/kilin_imu/src/mip_sdk"]
 	path = kilin_ros_ws/src/kilin_imu/src/mip_sdk
 	url = https://github.com/hiho817/mip_sdk.git
+[submodule "kilin_ros_ws/src/FAST_LIO_ROS2"]
+	path = kilin_ros_ws/src/FAST_LIO_ROS2
+	url = https://github.com/Ericsii/FAST_LIO_ROS2.git
+[submodule "kilin_ros_ws/src/livox_ros_driver2"]
+	path = kilin_ros_ws/src/livox_ros_driver2
+	url = https://github.com/Livox-SDK/livox_ros_driver2.git

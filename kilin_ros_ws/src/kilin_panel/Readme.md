@@ -23,7 +23,7 @@ source install/setup.bash
 2. Launch the GUI with the provided launch file:
 
 ```bash
-ros2 launch kilin_panel kilin_panel.launch.py
+ros2 launch kilin_panel launch.py
 ```
 
 Alternatively, run the installed console script:
@@ -82,7 +82,7 @@ This package places Python modules in `src/`. Below is a per-file summary of the
     - Subscribes to `/motor/state` (`MotorStateStamped`) and posts `MotorStateUpdateEvent` to the GUI to update state displays for each motor.
   - Contains a Qt custom event class `MotorStateUpdateEvent` for thread-safe UI updates.
 
-- `launch/kilin_panel.launch.py`
+- `launch/launch.py`
   - A ROS2 launch file that starts the packaged `kilin_panel` executable (console script). Use it with `ros2 launch`.
 
 - `setup.py` and `package.xml`

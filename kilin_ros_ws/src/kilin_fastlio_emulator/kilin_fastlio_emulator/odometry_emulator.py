@@ -11,9 +11,9 @@ class Emulator(Node):
     def __init__(self):
         super().__init__("kilin_fastlio_emulator")
         self.declare_parameter("ground_truth_topic", "/kilin/isaac/ground_truth/odometry")
-        self.declare_parameter("output_topic", "/kilin/fastlio/odometry")
-        self.declare_parameter("map_frame", "map_lio")
-        self.declare_parameter("base_frame", "base_link")
+        self.declare_parameter("output_topic", "/Odometry")
+        self.declare_parameter("map_frame", "camera_init")
+        self.declare_parameter("base_frame", "body")
         self.declare_parameter("position_noise_std_m", 0.0)
         self.declare_parameter("yaw_noise_std_rad", 0.0)
         self.pub = self.create_publisher(Odometry, self.get_parameter("output_topic").value, 10)

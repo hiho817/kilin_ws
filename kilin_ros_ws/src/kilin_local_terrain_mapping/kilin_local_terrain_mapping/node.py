@@ -14,7 +14,7 @@ class LocalTerrain(Node):
     def __init__(self):
         super().__init__("kilin_local_terrain_mapping")
         defaults = {
-            "odometry_topic": "/kilin/fastlio/odometry", "window_topic": "/kilin/terrain/local_window", "terrain_source": "analytic", "pointcloud_topic": "/kilin/fastlio/local_map", "forward_m": 6.0, "rear_m": 1.0, "half_width_m": 1.0, "resolution_m": 0.05, "rate_hz": 5.0,
+            "odometry_topic": "/Odometry", "window_topic": "/kilin/terrain/local_window", "terrain_source": "analytic", "pointcloud_topic": "/cloud_registered", "forward_m": 6.0, "rear_m": 1.0, "half_width_m": 1.0, "resolution_m": 0.05, "rate_hz": 5.0,
             "analytic_ramp.height_m": 0.08, "analytic_ramp.start_x_m": 0.75, "analytic_ramp.up_ramp_length_m": 0.30, "analytic_ramp.deck_length_m": 0.35, "analytic_ramp.down_ramp_length_m": 0.30, "analytic_ramp.track_center_y_m": 0.25, "analytic_ramp.track_width_m": 0.34,
             "analytic_second.enabled": True, "analytic_second.height_m": 0.08, "analytic_second.start_x_m": 2.70, "analytic_second.up_ramp_length_m": 0.30, "analytic_second.deck_length_m": 0.35, "analytic_second.down_ramp_length_m": 0.30, "analytic_second.track_center_y_m": -0.25,
         }
@@ -53,7 +53,7 @@ class LocalTerrain(Node):
             for point_x, point_y, point_z in self.points:
                 ix, iy = int((point_x - xs[0]) / resolution), int((point_y - ys[0]) / resolution)
                 if 0 <= ix < len(xs) and 0 <= iy < len(ys) and (not valid[iy, ix] or point_z > elevation[iy, ix]): elevation[iy, ix] = point_z; valid[iy, ix] = 1
-        msg = TerrainWindow(); msg.header = self.pose.header; msg.header.frame_id = "map_lio"; msg.origin.position.x = float(xs[0]); msg.origin.position.y = float(ys[0]); msg.resolution_m = resolution; msg.width = len(xs); msg.height = len(ys); msg.elevation_m = elevation.astype(np.float32).ravel().tolist(); msg.valid = valid.ravel().tolist(); self.pub.publish(msg)
+        msg = TerrainWindow(); msg.header = self.pose.header; msg.header.frame_id = "camera_init"; msg.origin.position.x = float(xs[0]); msg.origin.position.y = float(ys[0]); msg.resolution_m = resolution; msg.width = len(xs); msg.height = len(ys); msg.elevation_m = elevation.astype(np.float32).ravel().tolist(); msg.valid = valid.ravel().tolist(); self.pub.publish(msg)
         points = [[float(xs[ix]), float(ys[iy]), float(elevation[iy, ix])] for iy in range(0, len(ys), 2) for ix in range(0, len(xs), 2) if valid[iy, ix]]
         self.overlay_pub.publish(String(data=json.dumps({"points": points})))
 

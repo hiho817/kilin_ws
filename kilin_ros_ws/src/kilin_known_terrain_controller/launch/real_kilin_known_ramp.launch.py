@@ -20,6 +20,8 @@ def generate_launch_description():
             DeclareLaunchArgument("speed_m_s", default_value="0.05"),
             DeclareLaunchArgument("run_duration_s", default_value="30.0"),
             DeclareLaunchArgument("hard_motion_limit_s", default_value="35.0"),
+            DeclareLaunchArgument("vicon_trigger", default_value="false"),
+            DeclareLaunchArgument("debug_publish", default_value="false"),
             Node(
                 package="kilin_known_terrain_controller",
                 executable="known_terrain_controller",
@@ -41,6 +43,8 @@ def generate_launch_description():
                         "speed_m_s": LaunchConfiguration("speed_m_s"),
                         "run_duration_s": LaunchConfiguration("run_duration_s"),
                         "hard_motion_limit_s": LaunchConfiguration("hard_motion_limit_s"),
+                        "vicon_trigger.enabled": LaunchConfiguration("vicon_trigger"),
+                        "debug_publish_enabled": LaunchConfiguration("debug_publish"),
                     },
                 ],
             ),

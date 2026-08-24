@@ -110,6 +110,18 @@ so there is only one publisher of `/kilin/motor_cmd_raw`. `target:=real` starts
 neither Isaac bridge nor an Isaac simulation clock; use
 `real_kilin_known_ramp.launch.py` for the documented real-robot ramp procedure.
 
+For Vicon validation, `real_kilin_known_ramp.launch.py` accepts
+`vicon_trigger:=true`. It drives the existing active-low GPIO trigger on
+`/dev/gpiochip0`, line 112, only while the timed known-ramp motion is active.
+It returns the line inactive on completion, stale feedback, Ctrl-C, or normal
+node shutdown. Leave it disabled for simulation and for runs without Vicon.
+
+Set `debug_publish:=true` when launching either controller launch file to
+publish the lightweight `/kilin/planner/debug/horizon` (`nav_msgs/Path`) and
+`/kilin/planner/debug/footprints` (`visualization_msgs/MarkerArray`) topics.
+They contain only the planned horizon and body rectangles; they do not publish
+or render the terrain grid, FAST-LIO cloud, or RViz itself.
+
 For `target:=isaac`, the collected Isaac graph intentionally publishes feedback
 below the `/kilin/isaac` prefix. The legacy Isaac bridge converts its JointState
 into the same `/motor/state` contract used by the real robot. This launch

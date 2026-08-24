@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>kilin_fastlio_bringup</name>
+  <version>0.1.0</version>
+  <description>Integrated MID360s and windowed FAST-LIO2 bringup for Kilin.</description>
+  <maintainer email="kuojack0114@gmail.com">biorola</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>fast_lio</exec_depend>
+  <exec_depend>livox_ros_driver2</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

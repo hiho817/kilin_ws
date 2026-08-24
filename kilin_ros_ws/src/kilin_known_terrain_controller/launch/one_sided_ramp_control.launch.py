@@ -16,6 +16,7 @@ def generate_launch_description():
     run_duration_s = LaunchConfiguration("run_duration_s")
     hard_motion_limit_s = LaunchConfiguration("hard_motion_limit_s")
     auto_initialize_stance = LaunchConfiguration("auto_initialize_stance")
+    debug_publish = LaunchConfiguration("debug_publish")
     terrain_profile = LaunchConfiguration("terrain_profile")
     config = PathJoinSubstitution(
         [FindPackageShare("kilin_known_terrain_controller"), "config", "one_sided_ramp.yaml"]
@@ -57,6 +58,7 @@ def generate_launch_description():
                 "run_duration_s": run_duration_s,
                 "hard_motion_limit_s": hard_motion_limit_s,
                 "known_ramp.auto_initialize_stance": auto_initialize_stance,
+                "debug_publish_enabled": debug_publish,
             },
         ],
         remappings=[("/clock", "/kilin/isaac/clock")],
@@ -82,6 +84,7 @@ def generate_launch_description():
                 "run_duration_s": run_duration_s,
                 "hard_motion_limit_s": hard_motion_limit_s,
                 "known_ramp.auto_initialize_stance": auto_initialize_stance,
+                "debug_publish_enabled": debug_publish,
             },
         ],
         condition=IfCondition(PythonExpression(["'", target, "' == 'real'"])),
@@ -134,6 +137,11 @@ def generate_launch_description():
                     "Move to the nominal [-45, -45, 45, 45] degree stance "
                     "before known_ramp; set false when already in that pose"
                 ),
+            ),
+            DeclareLaunchArgument(
+                "debug_publish",
+                default_value="false",
+                description="Publish lightweight planned-path and footprint diagnostics",
             ),
             DeclareLaunchArgument(
                 "terrain_profile",

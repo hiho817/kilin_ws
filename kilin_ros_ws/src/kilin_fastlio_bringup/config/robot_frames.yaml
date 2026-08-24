@@ -1,0 +1,23 @@
+# Static frames owned by kilin_livox_bringup. Units are metres and radians.
+#
+# MID360 mount measurement:
+# - origin: midpoint of the front hip axes in base_link
+# - MID360 IMU origin: 0.200 m forward and 0.070 m upward from that origin
+# - front hip-axis midpoint in base_link: [0.244480, 0.0, -0.026929]
+# - MID360 +X points 45 degrees upward from base_link +X
+#
+# FAST-LIO publishes camera_init -> body dynamically, where body is the
+# MID360 IMU frame. The body_to_base_link values below are the inverse of the
+# measured base_link -> MID360 IMU pose.
+static_transforms:
+  - name: map_to_camera_init
+    parent_frame: map
+    child_frame: camera_init
+    translation_m: [0.0, 0.0, 0.0]
+    rpy_rad: [0.0, 0.7853981633974483, 0.0]
+
+  - name: mid360_body_to_base_link
+    parent_frame: body
+    child_frame: base_link
+    translation_m: [-0.28383913, 0.0, -0.34475267]
+    rpy_rad: [0.0, -0.7853981633974483, 0.0]

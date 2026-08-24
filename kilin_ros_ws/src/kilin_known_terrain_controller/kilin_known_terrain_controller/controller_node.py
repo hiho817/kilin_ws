@@ -4,12 +4,14 @@ from threading import Lock, Thread
 
 import numpy as np
 import rclpy
+from geometry_msgs.msg import Point, PoseStamped
 from kilin_msgs.msg import MotorCmdStamped, MotorStateStamped
 from kilin_msgs.msg import TerrainWindow
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, Path
 from std_msgs.msg import Float32
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
+from visualization_msgs.msg import Marker, MarkerArray
 
 from .command_mapping import radians_per_second_to_rpm10, validate_four
 from .hip_test import (
@@ -73,6 +75,13 @@ class KnownTerrainController(Node):
         self._speed_subscription = self.create_subscription(
             Float32, str(self.get_parameter("speed_command_topic").value),
             self._speed_callback, 10)
+        self._debug_path_publisher = self.create_publisher(
+            Path, "/kilin/planner/debug/horizon", 1
+        )
+        self._debug_footprint_publisher = self.create_publisher(
+            MarkerArray, "/kilin/planner/debug/footprints", 1
+        )
+        self._debug_footprint_marker_count = 0
         self._lock = Lock()
         self._latest_command = self._stationary_command()
         self._planning = False
@@ -112,6 +121,10 @@ class KnownTerrainController(Node):
         self._open_loop_yaw_rad = None
         self._last_open_loop_update_ns = None
         self._last_odom_time = None
+        self._trigger_chip = None
+        self._trigger_request = None
+        self._trigger_gpiod = None
+        self._trigger_on = False
 
         publish_rate = float(self.get_parameter("publish_rate_hz").value)
         planning_rate = float(self.get_parameter("planning_rate_hz").value)
@@ -160,7 +173,7 @@ class KnownTerrainController(Node):
             "motor_state_topic": "/motor/state",
             "joint_state_topic": "/kilin_joint_states",
             "use_odometry": False,
-            "odometry_topic": "/kilin/fastlio/odometry",
+            "odometry_topic": "/Odometry",
             "odometry_timeout_s": 0.5,
             "use_terrain_window": False,
             "terrain_window_topic": "/kilin/terrain/local_window",
@@ -229,6 +242,14 @@ class KnownTerrainController(Node):
             "stance.wheel_radius_m": 0.0585,
             "stance.tolerance_deg": 0.5,
             "stance.hold_s": 1.0,
+            # Emits only a small Path and horizon footprint markers. It does
+            # not enable RViz or publish terrain/FAST-LIO point clouds.
+            "debug_publish_enabled": False,
+            # Optional physical Vicon LED trigger.  It is deliberately off by
+            # default, and is intended only for the real robot.
+            "vicon_trigger.enabled": False,
+            "vicon_trigger.chip": "/dev/gpiochip0",
+            "vicon_trigger.line": 112,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -296,6 +317,12 @@ class KnownTerrainController(Node):
         return max(0.0, elapsed - float(self.get_parameter("startup_delay_s").value))
 
     def _control_cycle(self) -> None:
+        if self._completed:
+            self._set_vicon_trigger(False, "controller completed")
+            return
+        if self._mode == "known_ramp" and not self._feedback_is_fresh():
+            self._set_vicon_trigger(False, "motor feedback stale")
+            return
         if self._mode == "known_ramp" and not self._known_ramp_stance_ready:
             self._stance_initialization_cycle(continue_to_planner=True)
         elif self._mode in ("planner_posture_test", "known_ramp"):
@@ -308,6 +335,132 @@ class KnownTerrainController(Node):
             self._wheel_calibration_cycle()
         elif self._mode == "stance_initialization":
             self._stance_initialization_cycle()
+
+    def _set_vicon_trigger(self, enabled: bool, reason: str) -> None:
+        """Drive the optional active-low Vicon LED trigger safely.
+
+        GPIO is opened only when explicitly enabled for a real-robot run.  A
+        failure to access it never changes motor-control behavior.
+        """
+        if not bool(self.get_parameter("vicon_trigger.enabled").value):
+            return
+        if enabled == self._trigger_on:
+            return
+        try:
+            if self._trigger_request is None:
+                import gpiod
+                from gpiod.line import Direction, Value
+
+                chip = gpiod.Chip(str(self.get_parameter("vicon_trigger.chip").value))
+                line = int(self.get_parameter("vicon_trigger.line").value)
+                settings = gpiod.LineSettings(
+                    direction=Direction.OUTPUT,
+                    active_low=True,
+                    output_value=Value.INACTIVE,
+                )
+                self._trigger_request = chip.request_lines(
+                    consumer="kilin_known_terrain_vicon_trigger",
+                    config={line: settings},
+                )
+                self._trigger_chip = chip
+                self._trigger_gpiod = (line, Value)
+                self.get_logger().info(
+                    f"Vicon trigger ready: {self.get_parameter('vicon_trigger.chip').value} "
+                    f"line {line}, active-low"
+                )
+            line, value = self._trigger_gpiod
+            self._trigger_request.set_value(
+                line, value.ACTIVE if enabled else value.INACTIVE
+            )
+            self._trigger_on = enabled
+            self.get_logger().info(
+                f"Vicon trigger {'ON' if enabled else 'OFF'} ({reason})"
+            )
+        except Exception as exc:
+            self.get_logger().error(
+                f"Unable to set Vicon trigger ({reason}): {exc}; continuing without it"
+            )
+            self._release_vicon_trigger()
+
+    def _release_vicon_trigger(self) -> None:
+        """Return the trigger to its inactive state and relinquish the GPIO."""
+        if self._trigger_request is not None:
+            try:
+                line, value = self._trigger_gpiod
+                self._trigger_request.set_value(line, value.INACTIVE)
+                self._trigger_request.release()
+            except Exception:
+                pass
+        if self._trigger_chip is not None:
+            try:
+                self._trigger_chip.close()
+            except Exception:
+                pass
+        self._trigger_chip = None
+        self._trigger_request = None
+        self._trigger_gpiod = None
+        self._trigger_on = False
+
+    def _publish_debug_plan(self, path, frame_id: str) -> None:
+        """Publish lightweight planner diagnostics when explicitly requested."""
+        if not bool(self.get_parameter("debug_publish_enabled").value):
+            return
+        timestamp = self.get_clock().now().to_msg()
+        path_message = Path()
+        path_message.header.stamp = timestamp
+        path_message.header.frame_id = frame_id
+        for x_m, y_m, yaw_rad in zip(path.x_m, path.y_m, path.yaw_rad):
+            pose = PoseStamped()
+            pose.header = path_message.header
+            pose.pose.position.x = float(x_m)
+            pose.pose.position.y = float(y_m)
+            pose.pose.orientation.z = float(np.sin(0.5 * yaw_rad))
+            pose.pose.orientation.w = float(np.cos(0.5 * yaw_rad))
+            path_message.poses.append(pose)
+        self._debug_path_publisher.publish(path_message)
+
+        geometry = self._session.planner.geometry
+        local_corners = np.array([
+            [geometry.body_x_max_m, geometry.body_half_width_m],
+            [geometry.body_x_max_m, -geometry.body_half_width_m],
+            [geometry.body_x_min_m, -geometry.body_half_width_m],
+            [geometry.body_x_min_m, geometry.body_half_width_m],
+            [geometry.body_x_max_m, geometry.body_half_width_m],
+        ])
+        footprints = MarkerArray()
+        for marker_id, (x_m, y_m, yaw_rad) in enumerate(
+            zip(path.x_m, path.y_m, path.yaw_rad)
+        ):
+            rotation = np.array([
+                [np.cos(yaw_rad), -np.sin(yaw_rad)],
+                [np.sin(yaw_rad), np.cos(yaw_rad)],
+            ])
+            corners = local_corners @ rotation.T + np.array([x_m, y_m])
+            marker = Marker()
+            marker.header.stamp = timestamp
+            marker.header.frame_id = frame_id
+            marker.ns = "planned_body_footprints"
+            marker.id = marker_id
+            marker.type = Marker.LINE_STRIP
+            marker.action = Marker.ADD
+            marker.pose.orientation.w = 1.0
+            marker.scale.x = 0.015
+            marker.color.r = 0.1
+            marker.color.g = 0.9
+            marker.color.b = 0.2
+            marker.color.a = 0.9
+            marker.points = [Point(x=float(x), y=float(y), z=0.02) for x, y in corners]
+            footprints.markers.append(marker)
+        for marker_id in range(path.steps, self._debug_footprint_marker_count):
+            marker = Marker()
+            marker.header.stamp = timestamp
+            marker.header.frame_id = frame_id
+            marker.ns = "planned_body_footprints"
+            marker.id = marker_id
+            marker.action = Marker.DELETE
+            footprints.markers.append(marker)
+        self._debug_footprint_marker_count = path.steps
+        self._debug_footprint_publisher.publish(footprints)
 
     def _feedback_is_fresh(self) -> bool:
         if self._last_joint_state_time is None or self._measured_hips is None:
@@ -589,6 +742,8 @@ class KnownTerrainController(Node):
         elapsed = self._elapsed_motion_s()
         if self._completed or elapsed <= 0.0 or self._planning:
             return
+        if self._mode == "known_ramp":
+            self._set_vicon_trigger(True, "timed ramp motion started")
         if self._mode == "planner_posture_test":
             effective_duration = float(
                 self.get_parameter("planner_posture_test.duration_s").value
@@ -649,10 +804,16 @@ class KnownTerrainController(Node):
                         )
                         self._warned_speed_timeout = True
             x, y, yaw = self._integrated_open_loop_pose(speed)
+            # Analytic/open-loop plans live in their configured known-map
+            # coordinates. With FAST-LIO odometry enabled below, use the
+            # odometry message's actual frame instead (normally camera_init).
+            debug_frame_id = "known_map"
             if bool(self.get_parameter("use_odometry").value) and self._odometry_is_fresh():
                 with self._lock:
-                    pose = self._latest_odom.pose.pose
+                    odometry = self._latest_odom
+                    pose = odometry.pose.pose
                     x, y = pose.position.x, pose.position.y
+                    debug_frame_id = odometry.header.frame_id or debug_frame_id
                     yaw = float(np.arctan2(
                         2.0 * (pose.orientation.w * pose.orientation.z + pose.orientation.x * pose.orientation.y),
                         1.0 - 2.0 * (pose.orientation.y**2 + pose.orientation.z**2),
@@ -693,6 +854,7 @@ class KnownTerrainController(Node):
                 valid = np.asarray(window.valid, dtype=bool).reshape((window.height, window.width))
                 terrain = self._ElevationWindow(x_coordinates_m=wx, y_coordinates_m=wy, heights_m=values, valid_mask=valid, timestamp_s=elapsed, frame_id=window.header.frame_id)
             result = self._session.plan_cycle(path=path, terrain=terrain)
+            self._publish_debug_plan(path, debug_frame_id)
             with self._lock:
                 now_ns = self.get_clock().now().nanoseconds
                 self._planner_transition_start_hips = self._commanded_hips.copy()
@@ -867,6 +1029,8 @@ class KnownTerrainController(Node):
             self._last_joint_state_time = self.get_clock().now()
 
     def stop(self) -> None:
+        self._set_vicon_trigger(False, "controller shutdown")
+        self._release_vicon_trigger()
         if bool(self.get_parameter("armed").value):
             feedback_modes = (
                 "hip_test",
