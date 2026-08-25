@@ -183,6 +183,20 @@ The real launch bypasses `isaac_bridge`. `real_kilin_known_ramp.launch.py` publi
 
 Prerequisites: physical e-stop is reachable, wheel clearance/test area are ready, the real bridge endpoint is configured (including `CORE_MASTER_ADDR` if your deployment needs it), `kilin_panel` is open, and a second operator is present. The panel launch owns the real ROS/gRPC bridge; do not start a second `kilin_ros2_bridge` process.
 
+If `ros2 launch kilin_panel launch.py` reports that `kilin_ros2_bridge` is not
+found, the Livox upstream build likely cleared the workspace `install/`
+overlay. Rebuild the bridge with its project-level gRPC prefix, then source the
+workspace again:
+
+```bash
+cd /home/biorola/kilin_ws/kilin_ros_ws
+source /opt/ros/humble/setup.bash
+CMAKE_PREFIX_PATH=/home/biorola/kilin_ws/install:$CMAKE_PREFIX_PATH \
+  colcon build --packages-select kilin_ros2_bridge \
+  --cmake-args -DLOCAL_PACKAGE_PATH=/home/biorola/kilin_ws/install
+source install/setup.bash
+```
+
 ```bash
 # Terminal A: required real-Kilin panel and its ROS/gRPC bridge.
 # This source launch file is named launch.py. Do not start isaac_bridge or a
@@ -207,6 +221,20 @@ Confirm feedback before arming:
 ros2 topic echo --once /motor/state
 ```
 
+If Vicon is connected, verify its LED trigger before any motion. This is a
+GPIO-only three-second pulse: the controller remains disarmed and sends no
+motor command.
+
+```bash
+PYTHONNOUSERSITE=1 ros2 launch kilin_known_terrain_controller real_kilin_known_ramp.launch.py \
+  armed:=false vicon_trigger:=true vicon_trigger_test:=true
+```
+
+The LED must return dark automatically; Ctrl-C also forces it inactive. Use
+`vicon_trigger_test_duration_s:=<seconds>` to change the pulse length. The
+controller loads the required local gpiod 2.x binding only when it uses the
+physical trigger, so keep `PYTHONNOUSERSITE=1` for ROS reliability.
+
 Before arming the terrain controller, put the panel in **Manual** mode so its
 UI Send control is disabled. During an armed planner run, the terrain controller
 is the only permitted publisher of `/motor/command`; do not use the panel Send
@@ -226,8 +254,15 @@ PYTHONNOUSERSITE=1 ros2 launch kilin_known_terrain_controller real_kilin_known_r
   armed:=false mode:=known_ramp \
   terrain_profile:=terrain_150mm_20deg_single.yaml \
   use_speed_command:=false speed_m_s:=0.05 \
-  run_duration_s:=30.0 hard_motion_limit_s:=35.0
+  run_duration_s:=30.0 hard_motion_limit_s:=35.0 \
+  vicon_trigger:=true
 ```
+
+`vicon_trigger:=true` is required for a Vicon-synchronized experiment. It
+turns the active-low LED on only during the armed timed ramp motion and returns
+it dark on normal completion, a safety stop, or Ctrl-C. Do not include
+`vicon_trigger_test:=true` in an experiment; that is only the unarmed LED
+self-test above.
 
 Arm only after fresh feedback is still visible:
 
@@ -271,6 +306,7 @@ PYTHONNOUSERSITE=1 ros2 launch kilin_known_terrain_controller real_kilin_known_r
   terrain_profile:=terrain_150mm_20deg_single_600mm.yaml \
   use_speed_command:=false speed_m_s:=0.05 \
   run_duration_s:=30.0 hard_motion_limit_s:=35.0 \
+  vicon_trigger:=true \
   debug_publish:=true
 ```
 

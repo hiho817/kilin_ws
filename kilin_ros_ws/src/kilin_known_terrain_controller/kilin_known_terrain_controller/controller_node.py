@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from threading import Lock, Thread
 
 import numpy as np
@@ -125,12 +126,23 @@ class KnownTerrainController(Node):
         self._trigger_request = None
         self._trigger_gpiod = None
         self._trigger_on = False
+        self._vicon_trigger_test_start_timer = None
+        self._vicon_trigger_test_stop_timer = None
 
         publish_rate = float(self.get_parameter("publish_rate_hz").value)
         planning_rate = float(self.get_parameter("planning_rate_hz").value)
         self._publish_timer = self.create_timer(1.0 / publish_rate, self._publish_latest)
         self._planning_period_s = 1.0 / planning_rate
         self._planning_timer = self.create_timer(self._planning_period_s, self._control_cycle)
+        if (
+            bool(self.get_parameter("vicon_trigger.enabled").value)
+            and bool(self.get_parameter("vicon_trigger.test_mode").value)
+        ):
+            # Delay very slightly so normal node initialization and logging
+            # complete before a safe, unarmed physical LED self-test begins.
+            self._vicon_trigger_test_start_timer = self.create_timer(
+                0.1, self._start_vicon_trigger_test
+            )
         self.get_logger().info(
             f"Kilin controller ready; mode={self._mode}, command_topic={self._command_topic}, "
             f"armed={self.get_parameter('armed').value}. "
@@ -250,6 +262,15 @@ class KnownTerrainController(Node):
             "vicon_trigger.enabled": False,
             "vicon_trigger.chip": "/dev/gpiochip0",
             "vicon_trigger.line": 112,
+            # ROS runs with PYTHONNOUSERSITE=1 on this Orin.  The GPIO v2
+            # binding is intentionally added only when the trigger is used,
+            # so it cannot affect ros2cli's package discovery.
+            "vicon_trigger.gpiod_site_packages": (
+                "/home/biorola/.local/lib/python3.10/site-packages"
+            ),
+            # Safe GPIO-only self-test.  It neither arms nor commands motors.
+            "vicon_trigger.test_mode": False,
+            "vicon_trigger.test_duration_s": 3.0,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -348,6 +369,11 @@ class KnownTerrainController(Node):
             return
         try:
             if self._trigger_request is None:
+                gpiod_site_packages = str(
+                    self.get_parameter("vicon_trigger.gpiod_site_packages").value
+                )
+                if gpiod_site_packages and gpiod_site_packages not in sys.path:
+                    sys.path.append(gpiod_site_packages)
                 import gpiod
                 from gpiod.line import Direction, Value
 
@@ -381,6 +407,29 @@ class KnownTerrainController(Node):
                 f"Unable to set Vicon trigger ({reason}): {exc}; continuing without it"
             )
             self._release_vicon_trigger()
+
+    def _start_vicon_trigger_test(self) -> None:
+        """Run one GPIO-only Vicon LED pulse without arming the robot."""
+        if self._vicon_trigger_test_start_timer is not None:
+            self._vicon_trigger_test_start_timer.cancel()
+            self._vicon_trigger_test_start_timer = None
+        duration_s = max(
+            0.1, float(self.get_parameter("vicon_trigger.test_duration_s").value)
+        )
+        self.get_logger().info(
+            f"Starting safe Vicon trigger self-test for {duration_s:.1f} s; no motor command is sent"
+        )
+        self._set_vicon_trigger(True, "safe self-test started")
+        self._vicon_trigger_test_stop_timer = self.create_timer(
+            duration_s, self._stop_vicon_trigger_test
+        )
+
+    def _stop_vicon_trigger_test(self) -> None:
+        """End the one-shot GPIO-only Vicon LED pulse."""
+        if self._vicon_trigger_test_stop_timer is not None:
+            self._vicon_trigger_test_stop_timer.cancel()
+            self._vicon_trigger_test_stop_timer = None
+        self._set_vicon_trigger(False, "safe self-test completed")
 
     def _release_vicon_trigger(self) -> None:
         """Return the trigger to its inactive state and relinquish the GPIO."""
@@ -1029,6 +1078,12 @@ class KnownTerrainController(Node):
             self._last_joint_state_time = self.get_clock().now()
 
     def stop(self) -> None:
+        if self._vicon_trigger_test_start_timer is not None:
+            self._vicon_trigger_test_start_timer.cancel()
+            self._vicon_trigger_test_start_timer = None
+        if self._vicon_trigger_test_stop_timer is not None:
+            self._vicon_trigger_test_stop_timer.cancel()
+            self._vicon_trigger_test_stop_timer = None
         self._set_vicon_trigger(False, "controller shutdown")
         self._release_vicon_trigger()
         if bool(self.get_parameter("armed").value):

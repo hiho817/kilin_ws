@@ -116,6 +116,20 @@ For Vicon validation, `real_kilin_known_ramp.launch.py` accepts
 It returns the line inactive on completion, stale feedback, Ctrl-C, or normal
 node shutdown. Leave it disabled for simulation and for runs without Vicon.
 
+To verify the LED and Vicon capture path before a run, use the separate safe,
+GPIO-only self-test. It does not arm the controller or publish a motor command:
+
+```zsh
+PYTHONNOUSERSITE=1 ros2 launch kilin_known_terrain_controller real_kilin_known_ramp.launch.py \
+  armed:=false vicon_trigger:=true vicon_trigger_test:=true
+```
+
+The LED is active for three seconds by default and then returns dark. Override
+the pulse length with `vicon_trigger_test_duration_s:=<seconds>`; Ctrl-C also
+returns the line inactive immediately. Keep `PYTHONNOUSERSITE=1`: the
+controller adds the required local gpiod 2.x binding only when it opens the
+physical trigger, so unrelated user Python packages cannot affect `ros2`.
+
 Set `debug_publish:=true` when launching either controller launch file to
 publish the lightweight `/kilin/planner/debug/horizon` (`nav_msgs/Path`) and
 `/kilin/planner/debug/footprints` (`visualization_msgs/MarkerArray`) topics.
