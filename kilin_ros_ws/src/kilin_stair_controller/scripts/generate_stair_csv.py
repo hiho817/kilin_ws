@@ -56,6 +56,14 @@ REFERENCE_TRANSITION_ANGLE_DEG = 20.0
 MINIMUM_FRONT_REAR_STANCE_SEPARATION_DEG = 10.0
 HUB_COMMAND_TO_RPM = 0.1
 
+# Hardware CAD inspection showed that the same-side front and rear legs touch
+# when both hips are folded inward by about 45 degrees.  Keep the Stage-3 FL
+# support pose five degrees inside that mechanical limit.  The continuous FL
+# level target is 3 turns (1080 deg), so hardware generation clamps the former
+# 1140-degree pose to 1080 + 40 = 1120 degrees.
+STAGE3_LEVEL_TARGET_DEG = 1080.0
+MAX_HARDWARE_STAGE3_FL_INWARD_DEG = 40.0
+
 # Rise-dependent corrections below are experimental calibrations, not robot
 # geometry.  They have only been validated through the successful 0.12/0.35
 # gait, so do not extrapolate them beyond that rise.
@@ -244,7 +252,9 @@ def build_final_approach(angles: GeometryAngles) -> tuple[CyclePoint, ...]:
     )
 
 
-def build_stage3(angles: GeometryAngles) -> tuple[CyclePoint, ...]:
+def build_stage3(
+    angles: GeometryAngles, hardware_collision_clearance: bool = False
+) -> tuple[CyclePoint, ...]:
     """
     Return the validated flat-top targets relative to the generated base.
 
@@ -262,19 +272,30 @@ def build_stage3(angles: GeometryAngles) -> tuple[CyclePoint, ...]:
         360.0 + outward + preload,
         360.0 + outward + preload,
     )
-    validated_targets = (
+    stage3_fl_support = 1140.0
+    if hardware_collision_clearance:
+        stage3_fl_support = (
+            STAGE3_LEVEL_TARGET_DEG + MAX_HARDWARE_STAGE3_FL_INWARD_DEG
+        )
+    validated_targets = [
         (1040.0, 320.0, 760.0, 760.0),
         (1090.0, 370.0, 760.0, 760.0),
-        (1140.0, 320.0, 760.0, 760.0),
-        (1140.0, 320.0, 760.0, 1040.0),
-        (1140.0, 320.0, 1040.0, 1040.0),
-        (1080.0, 360.0, 1080.0, 1080.0),
-    )
+        (stage3_fl_support, 320.0, 760.0, 760.0),
+        (stage3_fl_support, 320.0, 760.0, 1040.0),
+        (stage3_fl_support, 320.0, 1040.0, 1040.0),
+    ]
+    if hardware_collision_clearance:
+        # Keep FL at the CAD-limited support angle while RL completes its
+        # motion, then return FL to its level target in a separate segment.
+        validated_targets.append(
+            (stage3_fl_support, 360.0, 1080.0, 1080.0)
+        )
+    validated_targets.append((1080.0, 360.0, 1080.0, 1080.0))
 
     def offset(target: tuple[float, float, float, float]) -> tuple[float, ...]:
         return tuple(target[index] - generated_start[index] for index in range(4))
 
-    return (
+    stage3 = [
         CyclePoint(
             2,
             offset(validated_targets[0]),
@@ -302,12 +323,21 @@ def build_stage3(angles: GeometryAngles) -> tuple[CyclePoint, ...]:
             hub_mode=(5, 5, 0, 5),
             arm_phase=3,
         ),
+    ]
+    stage3.append(
         CyclePoint(
             12,
             offset(validated_targets[5]),
             hub_mode=MODE0,
-        ),
+            # On hardware, keep the RL COM correction active until RL has
+            # completed 1040->1080. Retracting the arm before this clearance
+            # segment can destabilize the FL/FR/RR support triangle.
+            arm_phase=3 if hardware_collision_clearance else 0,
+        )
     )
+    if hardware_collision_clearance:
+        stage3.append(CyclePoint(14, offset(validated_targets[6]), hub_mode=MODE0))
+    return tuple(stage3)
 
 
 def initial_front_clearance_m(center_to_first_riser_m: float) -> float:
@@ -566,6 +596,7 @@ def generate_gait(
     middle_cycles: int = 1,
     include_stage3: bool = False,
     drive_scale: float = 1.0,
+    hardware_collision_clearance: bool = False,
 ) -> list[GaitRow]:
     validate_dimensions(rise_m, run_m, center_to_first_riser_m, drive_scale)
     if isinstance(middle_cycles, bool) or not isinstance(middle_cycles, int):
@@ -581,18 +612,25 @@ def generate_gait(
         append_climb_cycle(rows, entry_rows, climb_cycle, cycle_index)
     if include_stage3:
         append_stage3(
-            rows, build_final_approach(angles), build_stage3(angles)
+            rows,
+            build_final_approach(angles),
+            build_stage3(angles, hardware_collision_clearance),
         )
     rows = _retime_hub_only_segments(
         rows, rise_m, run_m, center_to_first_riser_m, drive_scale
     )
-    rows = annotate_terrain(rows, middle_cycles, include_stage3)
+    rows = annotate_terrain(
+        rows, middle_cycles, include_stage3, hardware_collision_clearance
+    )
     validate_gait(rows)
     return rows
 
 
 def annotate_terrain(
-    rows: Sequence[GaitRow], middle_cycles: int, include_stage3: bool
+    rows: Sequence[GaitRow],
+    middle_cycles: int,
+    include_stage3: bool,
+    hardware_collision_clearance: bool = False,
 ) -> list[GaitRow]:
     """
     Attach the known tread level and support mask to every gait target.
@@ -602,7 +640,8 @@ def annotate_terrain(
     supported (at the new tread level) on the following row.  This matches the
     controller's existing target-row arm-phase semantics.
     """
-    expected = 18 + 10 * middle_cycles + (13 if include_stage3 else 0)
+    stage3_rows = 14 if hardware_collision_clearance else 13
+    expected = 18 + 10 * middle_cycles + (stage3_rows if include_stage3 else 0)
     if len(rows) != expected:
         raise ValueError(
             f"terrain annotation expected {expected} rows, received {len(rows)}"
@@ -666,7 +705,8 @@ def annotate_terrain(
             add(row, swing, land)
         cursor += 7
 
-        stage3 = rows[cursor:cursor + 6]
+        stage3_length = 7 if hardware_collision_clearance else 6
+        stage3 = rows[cursor:cursor + stage3_length]
         actions = {
             3: (3, None),
             # RR has landed when the controller changes from phase 4 to 3.
@@ -787,6 +827,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.middle_cycles,
             args.include_stage3,
             args.drive_scale,
+            args.with_terrain_metadata,
         )
         write_csv(
             rows, args.output, args.force,

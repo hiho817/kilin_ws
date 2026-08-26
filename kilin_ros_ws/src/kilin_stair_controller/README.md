@@ -92,6 +92,16 @@ the controller transforms the horizontal correction back into the physical
 base/arm XY plane before selecting Kinova J1. Hardware configuration sets
 `require_balance_orientation: true`; an assumed-level balance state is rejected.
 
+Hardware generation also applies the CAD-derived same-side leg clearance limit
+and separates the final left-leg normalization. The FL level target is 1080
+degrees; its Stage-3 inward support pose is limited to 40 degrees, giving a
+1120-degree command and five degrees of angular reserve before the observed
+approximately 45-degree FL/RL interference pose. FL stays at 1120 degrees while
+RL completes its motion, then FL returns to 1080 degrees in a separate
+two-second segment. Arm phase 3 remains active until RL reaches 1080, so the
+Kinova correction is not retracted during this final RL motion. Simulation CSVs
+without `--with-terrain-metadata` retain the validated original Stage 3.
+
 Hardware configuration for the backward-mounted base:
 
 ```yaml

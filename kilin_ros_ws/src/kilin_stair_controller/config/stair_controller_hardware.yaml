@@ -21,8 +21,9 @@ kilin_stair_controller:
     require_command_subscriber: true
 
     com_safe_margin_m: 0.015
-    # FL, FR, RL, RR swing phases. RL remains feasible at 15 mm; the others use 20 mm.
-    com_safe_margin_by_phase_m: [0.020, 0.020, 0.015, 0.020]
+    # FL, FR, RL, RR swing phases. Hardware tests require 25 mm for FL/RR;
+    # RL remains feasible only at 15 mm and FR keeps the validated 20 mm.
+    com_safe_margin_by_phase_m: [0.025, 0.020, 0.015, 0.025]
     com_alpha_step: 0.05
     com_safe_hold_sec: 0.3
     amr_yaw_in_world_deg: 0.0

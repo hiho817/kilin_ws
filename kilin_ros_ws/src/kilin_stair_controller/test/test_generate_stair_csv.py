@@ -299,6 +299,27 @@ class GenerateStairCsvTest(unittest.TestCase):
         self.assertIn((1140.0, 320.0, 760.0, 760.0), [row.hips for row in rows])
         self.assertEqual((1080.0, 360.0, 1080.0, 1080.0), rows[-1].hips)
 
+    def test_hardware_stage3_limits_fl_inward_angle_until_rl_reaches_1080(self):
+        rows = generator.generate_gait(
+            rise_m=0.10,
+            run_m=0.35,
+            include_stage3=True,
+            hardware_collision_clearance=True,
+        )
+
+        hardware_stage3 = rows[-7:]
+        self.assertEqual(
+            generator.STAGE3_LEVEL_TARGET_DEG
+            + generator.MAX_HARDWARE_STAGE3_FL_INWARD_DEG,
+            max(row.hips[0] for row in hardware_stage3),
+        )
+        self.assertEqual((1120.0, 360.0, 1080.0, 1080.0), rows[-2].hips)
+        self.assertEqual((1080.0, 360.0, 1080.0, 1080.0), rows[-1].hips)
+        self.assertEqual(3, rows[-2].arm_phase)
+        self.assertEqual(0, rows[-1].arm_phase)
+        self.assertEqual(2.0, rows[-1].time - rows[-2].time)
+        self.assertEqual((True, True, True, True), rows[-2].supported)
+
     def test_center_distance_changes_only_initial_approach_duration(self):
         reference = generator.generate_gait()
         farther = generator.generate_gait(center_to_first_riser_m=0.70)
@@ -324,7 +345,11 @@ class GenerateStairCsvTest(unittest.TestCase):
             generator.write_csv(rows, output, force=True)
 
     def test_hardware_metadata_tracks_three_step_tread_transfers(self):
-        rows = generator.generate_gait(middle_cycles=1, include_stage3=True)
+        rows = generator.generate_gait(
+            middle_cycles=1,
+            include_stage3=True,
+            hardware_collision_clearance=True,
+        )
         self.assertEqual((0, 0, 0, 0), rows[0].tread_levels)
         self.assertEqual((1, 2, 0, 0), rows[17].tread_levels)
         self.assertEqual((2, 3, 1, 1), rows[27].tread_levels)
@@ -334,7 +359,11 @@ class GenerateStairCsvTest(unittest.TestCase):
         self.assertEqual((False, True, True, True), rows[22].supported)
 
     def test_hardware_csv_appends_terrain_columns_without_changing_gait(self):
-        rows = generator.generate_gait(middle_cycles=1, include_stage3=True)
+        rows = generator.generate_gait(
+            middle_cycles=1,
+            include_stage3=True,
+            hardware_collision_clearance=True,
+        )
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "hardware.csv"
             generator.write_csv(rows, output, terrain_rise_m=0.10)
