@@ -20,6 +20,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 
+#include "kilin_com_estimator/com_bias.hpp"
 #include "kilin_com_estimator/joint_mapping.hpp"
 #include "kilin_com_estimator/robot_com_model.hpp"
 #include "kilin_com_estimator/terrain_orientation.hpp"
@@ -49,6 +50,8 @@ public:
     declare_parameter<double>("publish_rate_hz", 30.0);
     declare_parameter<double>("input_timeout_sec", 0.5);
     declare_parameter<double>("wheel_radius_m", 0.0525);
+    declare_parameter<std::vector<double>>(
+      "com_bias_base_m", std::vector<double>{0.0, 0.0, 0.0});
     declare_parameter<bool>("assume_level_base", true);
     declare_parameter<bool>("require_terrain_state", false);
     declare_parameter<std::string>("terrain_state_topic", "/kilin/stair_terrain");
@@ -60,6 +63,8 @@ public:
     const double publish_rate_hz = get_parameter("publish_rate_hz").as_double();
     input_timeout_sec_ = get_parameter("input_timeout_sec").as_double();
     wheel_radius_m_ = get_parameter("wheel_radius_m").as_double();
+    com_bias_base_ = parse_com_bias(
+      get_parameter("com_bias_base_m").as_double_array());
     assume_level_base_ = get_parameter("assume_level_base").as_bool();
     require_terrain_state_ = get_parameter("require_terrain_state").as_bool();
     input_arm_joint_names_ = get_parameter("arm_input_joint_names").as_string_array();
@@ -114,6 +119,10 @@ public:
       "Hardware COM estimator ready: mass=%.4f kg, motor='%s', arm='%s', output='%s'",
       model_->model_mass(), motor_state_topic.c_str(), arm_joint_state_topic.c_str(),
       balance_state_topic.c_str());
+    RCLCPP_INFO(
+      get_logger(), "Base-frame COM bias: [%.1f, %.1f, %.1f] mm",
+      com_bias_base_.x() * 1000.0, com_bias_base_.y() * 1000.0,
+      com_bias_base_.z() * 1000.0);
     if (require_terrain_state_) {
       RCLCPP_INFO(
         get_logger(), "Known-stair orientation input: %s", terrain_state_topic.c_str());
@@ -278,7 +287,9 @@ private:
       output.header.frame_id = "base_link_gravity_aligned";
     }
 
-    const Eigen::Vector3d output_com = base_to_output * estimate.com;
+    // The force-plate calibration is expressed in base_link. Apply it before
+    // rotating the COM into the gravity-aligned output frame.
+    const Eigen::Vector3d output_com = base_to_output * (estimate.com + com_bias_base_);
     output.com.x = output_com.x();
     output.com.y = output_com.y();
     output.com.z = output_com.z();
@@ -302,6 +313,7 @@ private:
   std::vector<std::string> urdf_arm_joint_names_;
   double input_timeout_sec_{0.5};
   double wheel_radius_m_{0.0525};
+  Eigen::Vector3d com_bias_base_{Eigen::Vector3d::Zero()};
   bool assume_level_base_{true};
   bool require_terrain_state_{false};
   uint32_t sequence_{0};

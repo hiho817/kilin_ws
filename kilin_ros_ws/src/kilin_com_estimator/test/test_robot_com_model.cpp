@@ -3,16 +3,35 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
 
+#include "kilin_com_estimator/com_bias.hpp"
 #include "kilin_com_estimator/joint_mapping.hpp"
 #include "kilin_com_estimator/robot_com_model.hpp"
 
 namespace
 {
 using kilin_com_estimator::RobotComModel;
+
+TEST(ComBias, ParsesThreeFiniteBaseFrameValues)
+{
+  const auto bias = kilin_com_estimator::parse_com_bias({0.0054, -0.0011, 0.0});
+  EXPECT_DOUBLE_EQ(bias.x(), 0.0054);
+  EXPECT_DOUBLE_EQ(bias.y(), -0.0011);
+  EXPECT_DOUBLE_EQ(bias.z(), 0.0);
+}
+
+TEST(ComBias, RejectsWrongSizeAndNonFiniteValues)
+{
+  EXPECT_THROW(kilin_com_estimator::parse_com_bias({0.0, 0.0}), std::invalid_argument);
+  EXPECT_THROW(
+    kilin_com_estimator::parse_com_bias(
+      {0.0, std::numeric_limits<double>::quiet_NaN(), 0.0}),
+    std::invalid_argument);
+}
 
 TEST(JointMapping, UsesNamesAndIgnoresRobotiqJoint)
 {

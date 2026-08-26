@@ -14,6 +14,13 @@ Inputs:
 - `/kilin/stair_terrain`: the gait-synchronized stair rise, tread index, and
   support mask for FL/FR/RL/RR.
 
+The hardware-only `com_bias_base_m` parameter applies a force-plate calibration
+to the URDF COM in `base_link` before the result is rotated into the
+gravity-aligned output frame. Its default is `[0.0, 0.0, 0.0]`; the hardware
+YAML currently uses `[0.0054, -0.0011, 0.0]` m from the preliminary level-floor
+measurement. Simulation remains unmodified unless it explicitly sets this
+parameter.
+
 The first hardware version intentionally uses only measured hip and Kinova
 angles. Steering, wheel rotation, and the unsensed passive suspension joints
 remain at zero in the URDF.

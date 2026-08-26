@@ -1,0 +1,21 @@
+kilin_com_estimator:
+  ros__parameters:
+    motor_state_topic: /motor/state
+    arm_joint_state_topic: /joint_states
+    balance_state_topic: /kilin/balance_state
+    publish_rate_hz: 30.0
+    input_timeout_sec: 0.5
+    wheel_radius_m: 0.0525
+    # Preliminary force-plate calibration at hip=0 and Kinova standard pose.
+    # Expressed in base_link and applied before gravity-aligned rotation.
+    com_bias_base_m: [0.0054, -0.0011, 0.0]
+    # No hardware IMU is installed. The gait controller publishes synchronized
+    # tread levels/support masks, allowing roll and pitch to be reconstructed.
+    assume_level_base: false
+    require_terrain_state: true
+    terrain_state_topic: /kilin/stair_terrain
+    arm_input_joint_names:
+      [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6, joint_7]
+    arm_urdf_joint_names:
+      [arm_joint_1, arm_joint_2, arm_joint_3, arm_joint_4,
+       arm_joint_5, arm_joint_6, arm_joint_7]
