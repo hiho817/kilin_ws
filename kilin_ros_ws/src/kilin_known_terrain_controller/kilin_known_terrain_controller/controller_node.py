@@ -21,6 +21,7 @@ from .hip_test import (
     smoothstep_position,
     stance_wheel_speed_rad_s,
 )
+from .odometry_math import relative_planar_pose
 from .ramp_model import OneSidedRamp, OneSidedRampSequence
 
 
@@ -84,7 +85,10 @@ class KnownTerrainController(Node):
         )
         self._debug_footprint_marker_count = 0
         self._lock = Lock()
-        self._latest_command = self._stationary_command()
+        # Do not cache a nominal pose here.  The publish timer runs faster than
+        # the control timer, so a cached 45-degree stance could otherwise be
+        # sent for one or more cycles immediately after the first feedback.
+        self._latest_command = None
         self._planning = False
         self._clock_start_ns = None
         self._completed = False
@@ -122,6 +126,9 @@ class KnownTerrainController(Node):
         self._open_loop_yaw_rad = None
         self._last_open_loop_update_ns = None
         self._last_odom_time = None
+        self._odometry_origin_xy_yaw = None
+        self._warned_odometry_unavailable = False
+        self._warned_odometry_frame = False
         self._trigger_chip = None
         self._trigger_request = None
         self._trigger_gpiod = None
@@ -146,7 +153,8 @@ class KnownTerrainController(Node):
         self.get_logger().info(
             f"Kilin controller ready; mode={self._mode}, command_topic={self._command_topic}, "
             f"armed={self.get_parameter('armed').value}. "
-            "Motion modes publish no command until fresh hip feedback arrives."
+            "Motion modes remain silent until fresh hip feedback has been captured "
+            "by a control cycle."
         )
         if self._mode in ("planner_posture_test", "known_ramp"):
             hard_limit = float(self.get_parameter("hard_motion_limit_s").value)
@@ -187,6 +195,8 @@ class KnownTerrainController(Node):
             "use_odometry": False,
             "odometry_topic": "/Odometry",
             "odometry_timeout_s": 0.5,
+            "odometry_required_frame": "",
+            "odometry_relative_origin": False,
             "use_terrain_window": False,
             "terrain_window_topic": "/kilin/terrain/local_window",
             "use_speed_command": False,
@@ -524,9 +534,79 @@ class KnownTerrainController(Node):
         return 0.0 <= age_s <= float(self.get_parameter("odometry_timeout_s").value)
 
     def _odometry_callback(self, message: Odometry) -> None:
+        required_frame = str(self.get_parameter("odometry_required_frame").value)
+        if required_frame and message.header.frame_id != required_frame:
+            if not self._warned_odometry_frame:
+                self.get_logger().error(
+                    "Ignoring odometry in frame "
+                    f"'{message.header.frame_id}'; required frame is '{required_frame}'"
+                )
+                self._warned_odometry_frame = True
+            return
         with self._lock:
             self._latest_odom = message
             self._last_odom_time = self.get_clock().now()
+            self._warned_odometry_frame = False
+
+    @staticmethod
+    def _yaw_from_odometry(message: Odometry) -> float:
+        orientation = message.pose.pose.orientation
+        return float(
+            np.arctan2(
+                2.0
+                * (
+                    orientation.w * orientation.z
+                    + orientation.x * orientation.y
+                ),
+                1.0 - 2.0 * (orientation.y**2 + orientation.z**2),
+            )
+        )
+
+    def _planner_pose_from_odometry(
+        self, message: Odometry
+    ) -> tuple[float, float, float, str]:
+        pose = message.pose.pose
+        measured = (
+            float(pose.position.x),
+            float(pose.position.y),
+            self._yaw_from_odometry(message),
+        )
+        frame_id = message.header.frame_id or "known_map"
+        if not bool(self.get_parameter("odometry_relative_origin").value):
+            return (*measured, frame_id)
+        with self._lock:
+            if self._odometry_origin_xy_yaw is None:
+                self._odometry_origin_xy_yaw = measured
+                self.get_logger().info(
+                    "Captured corrected odometry origin for analytical map: "
+                    f"x={measured[0]:.4f} m, y={measured[1]:.4f} m, "
+                    f"yaw={np.rad2deg(measured[2]):.3f} deg"
+                )
+            origin = self._odometry_origin_xy_yaw
+        anchor = (
+            float(self.get_parameter("initial_x_m").value),
+            float(self.get_parameter("initial_y_m").value),
+            float(self.get_parameter("initial_yaw_rad").value),
+        )
+        x, y, yaw = relative_planar_pose(measured, origin, anchor)
+        return x, y, yaw, "known_map"
+
+    def _stop_for_unavailable_odometry(self) -> None:
+        with self._lock:
+            if self._commanded_hips is not None:
+                self._planner_target_hips = self._commanded_hips.copy()
+                self._planner_transition_start_hips = self._commanded_hips.copy()
+                self._planner_transition_start_ns = self.get_clock().now().nanoseconds
+                self._planner_wheel_rates = np.zeros(4)
+                self._planner_hubs_at_rest = True
+                self._latest_command = self._motor_command(
+                    self._commanded_hips, np.zeros(4), hubs_at_rest=True
+                )
+        if not self._warned_odometry_unavailable:
+            self.get_logger().error(
+                "Corrected odometry is missing or stale; holding hips and commanding wheel REST"
+            )
+            self._warned_odometry_unavailable = True
 
     def _terrain_callback(self, message: TerrainWindow) -> None:
         with self._lock:
@@ -759,6 +839,11 @@ class KnownTerrainController(Node):
     def _start_plan_cycle(self) -> None:
         if not self._feedback_is_fresh():
             return
+        if bool(self.get_parameter("use_odometry").value) and not self._odometry_is_fresh():
+            self._set_vicon_trigger(False, "corrected odometry stale")
+            self._stop_for_unavailable_odometry()
+            return
+        self._warned_odometry_unavailable = False
         if self._clock_start_ns is None:
             nominal = np.asarray(self._planner_config.nominal_hip_rad, dtype=float)
             initial_error_deg = np.rad2deg(
@@ -852,21 +937,20 @@ class KnownTerrainController(Node):
                             "Speed command watchdog expired; ramping wheel speed to zero"
                         )
                         self._warned_speed_timeout = True
-            x, y, yaw = self._integrated_open_loop_pose(speed)
-            # Analytic/open-loop plans live in their configured known-map
-            # coordinates. With FAST-LIO odometry enabled below, use the
-            # odometry message's actual frame instead (normally camera_init).
-            debug_frame_id = "known_map"
-            if bool(self.get_parameter("use_odometry").value) and self._odometry_is_fresh():
+            if bool(self.get_parameter("use_odometry").value):
+                if not self._odometry_is_fresh():
+                    self._set_vicon_trigger(False, "corrected odometry stale")
+                    self._stop_for_unavailable_odometry()
+                    return
                 with self._lock:
                     odometry = self._latest_odom
-                    pose = odometry.pose.pose
-                    x, y = pose.position.x, pose.position.y
-                    debug_frame_id = odometry.header.frame_id or debug_frame_id
-                    yaw = float(np.arctan2(
-                        2.0 * (pose.orientation.w * pose.orientation.z + pose.orientation.x * pose.orientation.y),
-                        1.0 - 2.0 * (pose.orientation.y**2 + pose.orientation.z**2),
-                    ))
+                x, y, yaw, debug_frame_id = self._planner_pose_from_odometry(
+                    odometry
+                )
+                self._warned_odometry_unavailable = False
+            else:
+                x, y, yaw = self._integrated_open_loop_pose(speed)
+                debug_frame_id = "known_map"
             path = self._make_straight_horizon(
                 start_x_m=x,
                 start_y_m=y,
@@ -954,10 +1038,6 @@ class KnownTerrainController(Node):
             leg.hub.motor_mode = int(self.get_parameter(hub_mode_parameter).value)
         return message
 
-    def _stationary_command(self, hubs_at_rest: bool = False) -> MotorCmdStamped:
-        hips = getattr(getattr(self, "_session", None), "executed_hip_rad", np.deg2rad([-45.0, -45.0, 45.0, 45.0]))
-        return self._motor_command(hips, np.zeros(4), hubs_at_rest=hubs_at_rest)
-
     def _publish_latest(self) -> None:
         if not bool(self.get_parameter("armed").value):
             return
@@ -982,6 +1062,14 @@ class KnownTerrainController(Node):
             self._mode == "known_ramp" and self._known_ramp_stance_ready
         )
         if planner_control_active and self._known_ramp_origin_hips is None:
+            return
+        # Fresh feedback alone must not release a position command.  Wait for
+        # the active 10 Hz control cycle to create a command from that feedback.
+        with self._lock:
+            startup_command_ready = (
+                self._commanded_hips is not None and self._latest_command is not None
+            )
+        if not startup_command_ready:
             return
         self._warned_waiting_for_feedback = False
         with self._lock:
@@ -1087,32 +1175,25 @@ class KnownTerrainController(Node):
         self._set_vicon_trigger(False, "controller shutdown")
         self._release_vicon_trigger()
         if bool(self.get_parameter("armed").value):
-            feedback_modes = (
-                "hip_test",
-                "hip_calibration",
-                "wheel_calibration",
-                "stance_initialization",
-                "planner_posture_test",
-            )
-            if self._mode in feedback_modes and self._commanded_hips is None:
-                return
-            if (
-                self._mode in ("planner_posture_test", "known_ramp")
-                and self._known_ramp_origin_hips is None
-                and self._commanded_hips is None
-            ):
+            with self._lock:
+                hips = self._commanded_hips
+            # Never emit a nominal fallback pose during shutdown.  If this
+            # controller never initialized from measured feedback, it has not
+            # issued a position command and must remain silent.
+            if hips is None:
                 return
             for _ in range(3):
-                with self._lock:
-                    hips = self._commanded_hips
-                command = (
-                    self._motor_command(
-                        hips,
-                        np.zeros(4),
-                        hubs_at_rest=self._mode in feedback_modes,
-                    )
-                    if hips is not None
-                    else self._stationary_command(hubs_at_rest=True)
+                command = self._motor_command(
+                    hips,
+                    np.zeros(4),
+                    hubs_at_rest=self._mode
+                    in (
+                        "hip_test",
+                        "hip_calibration",
+                        "wheel_calibration",
+                        "stance_initialization",
+                        "planner_posture_test",
+                    ),
                 )
                 self._publisher.publish(command)
 

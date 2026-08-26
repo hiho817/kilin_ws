@@ -24,6 +24,19 @@ def generate_launch_description():
             DeclareLaunchArgument("vicon_trigger_test", default_value="false"),
             DeclareLaunchArgument("vicon_trigger_test_duration_s", default_value="3.0"),
             DeclareLaunchArgument("debug_publish", default_value="false"),
+            DeclareLaunchArgument(
+                "use_odometry",
+                default_value="false",
+                description=(
+                    "Use corrected /kilin/fastlio/odometry for analytical-map progress. "
+                    "The controller stops instead of falling back if it becomes stale."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "odometry_relative_origin",
+                default_value="true",
+                description="Zero corrected odometry when ramp motion begins.",
+            ),
             Node(
                 package="kilin_known_terrain_controller",
                 executable="known_terrain_controller",
@@ -39,7 +52,12 @@ def generate_launch_description():
                         "command_topic": "/motor/command",
                         "feedback_source": "motor_state",
                         "motor_state_topic": "/motor/state",
-                        "use_odometry": False,
+                        "use_odometry": LaunchConfiguration("use_odometry"),
+                        "odometry_topic": "/kilin/fastlio/odometry",
+                        "odometry_required_frame": "map",
+                        "odometry_relative_origin": LaunchConfiguration(
+                            "odometry_relative_origin"
+                        ),
                         "use_terrain_window": False,
                         "use_speed_command": LaunchConfiguration("use_speed_command"),
                         "speed_m_s": LaunchConfiguration("speed_m_s"),

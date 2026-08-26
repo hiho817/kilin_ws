@@ -21,3 +21,11 @@ static_transforms:
     child_frame: base_link
     translation_m: [-0.28383913, 0.0, -0.34475267]
     rpy_rad: [0.0, -0.7853981633974483, 0.0]
+
+  # Geometric center of the four audited hip axes in base_link. This is the
+  # planning pose origin; base_link itself is the exported body CoM origin.
+  - name: base_link_to_hip_axis_center
+    parent_frame: base_link
+    child_frame: hip_axis_center
+    translation_m: [0.00448, 0.00106, -0.026929]
+    rpy_rad: [0.0, 0.0, 0.0]

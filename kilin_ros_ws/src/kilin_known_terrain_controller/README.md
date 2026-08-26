@@ -116,6 +116,88 @@ For Vicon validation, `real_kilin_known_ramp.launch.py` accepts
 It returns the line inactive on completion, stale feedback, Ctrl-C, or normal
 node shutdown. Leave it disabled for simulation and for runs without Vicon.
 
+## Real Kilin: analytical map with corrected FAST-LIO2 odometry
+
+FAST-LIO keeps its raw `/Odometry` interface. `kilin_fastlio_bringup` also
+publishes `/kilin/fastlio/odometry`, transformed through
+`map -> camera_init -> body -> base_link -> hip_axis_center`. The known-ramp
+controller must use only this corrected topic. At the first active planning
+cycle it rebases the corrected pose to `initial_x_m`, `initial_y_m`, and
+`initial_yaw_rad`, so the surveyed ramp still begins at the analytical
+profile's configured `ramp.start_x_m`.
+
+Start FAST-LIO first:
+
+```bash
+ros2 launch kilin_fastlio_bringup mid360s_fastlio.launch.py
+```
+
+Verify the corrected topic before arming anything:
+
+```bash
+ros2 topic hz /kilin/fastlio/odometry
+ros2 topic echo /kilin/fastlio/odometry --once
+```
+
+The message must report `frame_id: map`, `child_frame_id: hip_axis_center`, and
+approximately 10 Hz. The 2026-08-26 experiment repeats the same analytical
+150 mm profile twice, as `ramp_test01` and `ramp_test02`. Both runs use corrected
+odometry progress, no live terrain window, 0.1 m/s commanded speed, 30.0 s run
+duration, and a 35.0 s hard limit.
+
+Record the complete ROS graph in a separate terminal. This intentionally keeps
+the large accumulated map and all point-cloud/debug topics for post-run frame,
+mapping, and planner analysis.
+
+Prepare both trial directories once:
+
+```bash
+mkdir -p ~/kilin_ws/logs/2026-08-26/ramp_test01
+mkdir -p ~/kilin_ws/logs/2026-08-26/ramp_test02
+```
+
+For the first run, record into its dedicated bag directory:
+
+```bash
+ros2 bag record -a \
+  -o ~/kilin_ws/logs/2026-08-26/ramp_test01/bag
+```
+
+For the second run, use:
+
+```bash
+ros2 bag record -a \
+  -o ~/kilin_ws/logs/2026-08-26/ramp_test02/bag
+```
+
+Start recording only after FAST-LIO and `/kilin/fastlio/odometry` are healthy,
+but before launching the controller. Save the corresponding Vicon exports as
+`ramp_test01/vicon_ramp_test01.csv` and `ramp_test02/vicon_ramp_test02.csv`.
+Do not rename the generated `bag` directory, its `.db3` file, or
+`metadata.yaml` after recording.
+
+Then launch the experiment:
+
+```bash
+PYTHONNOUSERSITE=1 ros2 launch kilin_known_terrain_controller \
+  real_kilin_known_ramp.launch.py \
+  armed:=true mode:=known_ramp \
+  terrain_profile:=terrain_150mm_20deg_single_600mm.yaml \
+  use_odometry:=true odometry_relative_origin:=true \
+  use_speed_command:=false speed_m_s:=0.1 \
+  run_duration_s:=30.0 hard_motion_limit_s:=35.0 \
+  vicon_trigger:=true debug_publish:=true
+```
+
+Use this identical controller command for both runs. Stop the bag recorder
+cleanly with Ctrl-C after each controller run, confirm `metadata.yaml` exists,
+reset the robot and physical starting pose, then start the second bag recorder.
+
+`use_terrain_window` remains hard-disabled in the real analytical-map launch.
+If corrected odometry is absent, is in the wrong frame, or becomes older than
+`odometry_timeout_s`, the controller holds the current hips and commands all
+wheel hubs to REST. It does not fall back to time-integrated position.
+
 To verify the LED and Vicon capture path before a run, use the separate safe,
 GPIO-only self-test. It does not arm the controller or publish a motor command:
 

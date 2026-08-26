@@ -42,8 +42,11 @@ package as shown above. The driver is then resolved from `install/` while its
 clean source submodule remains untouched.
 
 FAST-LIO2 retains its default interfaces: `/Odometry` (`camera_init` to
-`body`), `/Laser_map`, `/cloud_registered`, and `/path`.  Kilin consumers use
-these defaults directly. `cube_side_length: 30.0` bounds FAST-LIO2's active
+`body`), `/Laser_map`, `/cloud_registered`, and `/path`. Kilin consumers use
+the raw topics for diagnostics. This bringup additionally publishes corrected
+`/kilin/fastlio/odometry` (`map` to `hip_axis_center`) for the motion planner.
+The adapter preserves the raw FAST-LIO topic and refuses unexpected source
+frames. `cube_side_length: 30.0` bounds FAST-LIO2's active
 ikd-tree map window.
 
 ## Robot frames
@@ -56,6 +59,11 @@ forward and 70 mm upward, with the MID360 pitched 45 degrees upward. It also
 publishes `map` to `camera_init` with a +45 degree pitch, which levels the
 otherwise sensor-aligned FAST-LIO local map. In RViz set **Fixed Frame** to
 `map` and display `base_link`, `/Odometry`, and `/cloud_registered`.
+
+The static frame file also publishes `base_link -> hip_axis_center` at the
+geometric center of the four audited hip axes. The odometry adapter composes
+this full TF chain rather than treating the pitched sensor-frame X coordinate
+as robot-forward distance.
 
 If the mechanical mount changes, update `config/robot_frames.yaml`; do not put
 this robot-mount transform in FAST-LIO's LiDAR-to-IMU extrinsic parameters.

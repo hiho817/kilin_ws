@@ -71,5 +71,19 @@ def generate_launch_description():
             output="screen",
             parameters=[fastlio_config],
         ),
+        Node(
+            package="kilin_fastlio_bringup",
+            executable="hip_center_odometry_adapter.py",
+            name="kilin_fastlio_hip_center_odometry",
+            output="screen",
+            parameters=[{
+                "input_topic": "/Odometry",
+                "output_topic": "/kilin/fastlio/odometry",
+                "expected_source_parent_frame": "camera_init",
+                "expected_source_child_frame": "body",
+                "target_parent_frame": "map",
+                "target_child_frame": "hip_axis_center",
+            }],
+        ),
     ]
     return LaunchDescription(actions + static_tf_nodes)

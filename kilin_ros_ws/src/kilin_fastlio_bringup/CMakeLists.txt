@@ -3,7 +3,16 @@ project(kilin_fastlio_bringup)
 
 find_package(ament_cmake REQUIRED)
 
+install(PROGRAMS scripts/hip_center_odometry_adapter.py
+  DESTINATION lib/${PROJECT_NAME})
+
 install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME})
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_hip_center_odometry_adapter
+    test/test_hip_center_odometry_adapter.py)
+endif()
 
 ament_package()
