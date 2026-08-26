@@ -4,6 +4,11 @@
 # nounset only after sourcing the ROS and workspace overlays below.
 set -eo pipefail
 
+# The Orin has a user-site NumPy 2.x installation which is binary-incompatible
+# with Ubuntu 22.04's ROS Python SciPy.  The real controller launch already
+# uses this isolation; make offline replays equally reproducible.
+export PYTHONNOUSERSITE=1
+
 usage() {
   cat <<'EOF'
 Usage: run_terrain_shadow_replay.sh --bag BAG_DIRECTORY --label LABEL [options]
@@ -59,8 +64,8 @@ set -u
 
 run_dir="$output_root/$label"
 mkdir -p "$run_dir"
-printf 'bag=%q\nlabel=%q\nrate=%q\nfastlio_config=%q\nterrain_resolution_m=%q\nrecord_derived=%q\n' \
-  "$bag" "$label" "$rate" "$fastlio_config" "$terrain_resolution_m" "$record_derived" > "$run_dir/run.env"
+printf 'bag=%q\nlabel=%q\nrate=%q\nfastlio_config=%q\nterrain_resolution_m=%q\nrecord_derived=%q\npython_user_site=%q\n' \
+  "$bag" "$label" "$rate" "$fastlio_config" "$terrain_resolution_m" "$record_derived" "$PYTHONNOUSERSITE" > "$run_dir/run.env"
 sha256sum "$fastlio_config" >> "$run_dir/run.env"
 
 launch_pid=""
