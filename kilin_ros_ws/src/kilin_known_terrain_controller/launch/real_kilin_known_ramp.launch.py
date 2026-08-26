@@ -25,6 +25,14 @@ def generate_launch_description():
             DeclareLaunchArgument("vicon_trigger_test_duration_s", default_value="3.0"),
             DeclareLaunchArgument("debug_publish", default_value="false"),
             DeclareLaunchArgument(
+                "use_terrain_window",
+                default_value="false",
+                description=(
+                    "Use /kilin/terrain/local_window instead of the analytical profile. "
+                    "Keep false for analytical-map or shadow-mapping experiments."
+                ),
+            ),
+            DeclareLaunchArgument(
                 "use_odometry",
                 default_value="false",
                 description=(
@@ -58,7 +66,7 @@ def generate_launch_description():
                         "odometry_relative_origin": LaunchConfiguration(
                             "odometry_relative_origin"
                         ),
-                        "use_terrain_window": False,
+                        "use_terrain_window": LaunchConfiguration("use_terrain_window"),
                         "use_speed_command": LaunchConfiguration("use_speed_command"),
                         "speed_m_s": LaunchConfiguration("speed_m_s"),
                         "run_duration_s": LaunchConfiguration("run_duration_s"),

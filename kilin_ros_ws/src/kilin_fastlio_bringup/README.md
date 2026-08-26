@@ -65,5 +65,13 @@ geometric center of the four audited hip axes. The odometry adapter composes
 this full TF chain rather than treating the pitched sensor-frame X coordinate
 as robot-forward distance.
 
+## Compute budget and Orin deployment
+
+Read [COMPUTE_BUDGET.md](COMPUTE_BUDGET.md) before using the dense terrain
+configuration on Orin. It documents compute variables across the MID-360
+driver, FAST-LIO2, ROS outputs, local terrain mapper, and planner. In this
+FAST-LIO2 fork, `mapping.fov_degree` is not a raw-scan FOV crop and does not
+reduce registration load.
+
 If the mechanical mount changes, update `config/robot_frames.yaml`; do not put
 this robot-mount transform in FAST-LIO's LiDAR-to-IMU extrinsic parameters.

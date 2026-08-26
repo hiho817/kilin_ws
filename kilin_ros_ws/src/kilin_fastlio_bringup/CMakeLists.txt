@@ -3,7 +3,9 @@ project(kilin_fastlio_bringup)
 
 find_package(ament_cmake REQUIRED)
 
-install(PROGRAMS scripts/hip_center_odometry_adapter.py
+install(PROGRAMS
+  scripts/hip_center_odometry_adapter.py
+  scripts/run_terrain_shadow_replay.sh
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY config launch
