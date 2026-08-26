@@ -6,11 +6,13 @@ from __future__ import annotations
 import numpy as np
 import rclpy
 from nav_msgs.msg import Odometry
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.time import Time
 from scipy.spatial.transform import Rotation
-from tf2_ros import Buffer, TransformException, TransformListener
+from tf2_msgs.msg import TFMessage
+from tf2_ros import Buffer, TransformException
 
 
 def transform_matrix(translation, quaternion_xyzw) -> np.ndarray:
@@ -94,8 +96,16 @@ class HipCenterOdometryAdapter(Node):
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
+        # The two transforms required here are static calibration transforms.
+        # Do not subscribe this node to FAST-LIO's dynamic /tf stream: during
+        # bag replay its asynchronous output can be slightly out of timestamp
+        # order, which produces TF_OLD_DATA although neither transform needs
+        # that stream.
         self._tf_buffer = Buffer()
-        self._tf_listener = TransformListener(self._tf_buffer, self)
+        self._static_tf_subscription = self.create_subscription(
+            TFMessage, "/tf_static", self._static_tf_callback,
+            QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+        )
         self._publisher = self.create_publisher(
             Odometry, str(self.get_parameter("output_topic").value), 10
         )
@@ -111,6 +121,10 @@ class HipCenterOdometryAdapter(Node):
             "FAST-LIO hip-center adapter ready: /Odometry -> "
             f"{self.get_parameter('output_topic').value}"
         )
+
+    def _static_tf_callback(self, message: TFMessage) -> None:
+        for transform in message.transforms:
+            self._tf_buffer.set_transform_static(transform, "kilin_fastlio_static_frames")
 
     def _callback(self, message: Odometry) -> None:
         expected_parent = str(

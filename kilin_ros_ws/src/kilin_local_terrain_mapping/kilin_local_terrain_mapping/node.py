@@ -11,12 +11,14 @@ from geometry_msgs.msg import Point
 from kilin_msgs.msg import TerrainWindow
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.time import Time
 from rclpy.executors import ExternalShutdownException
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import String
-from tf2_ros import Buffer, TransformListener, TransformException
+from tf2_msgs.msg import TFMessage
+from tf2_ros import Buffer, TransformException
 from visualization_msgs.msg import Marker
 
 from .elevation import (
@@ -87,8 +89,16 @@ class LocalTerrain(Node):
         self.pose = None
         self.cloud_buffer = deque()
         self.cloud_stamp_ns = None
+        # Registered clouds are fixed-frame (camera_init) points.  Only the
+        # static map->camera_init calibration is needed for that conversion;
+        # map->hip_axis_center is taken directly from corrected odometry below.
+        # This deliberately avoids FAST-LIO's dynamic /tf during replay, whose
+        # asynchronous transforms may arrive slightly out of stamp order.
         self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.static_tf_subscription = self.create_subscription(
+            TFMessage, "/tf_static", self._static_tf_callback,
+            QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+        )
         self.pub = self.create_publisher(TerrainWindow, self.get_parameter("window_topic").value, 1)
         self.cells_pub = self.create_publisher(PointCloud2, "/kilin/terrain/local_window/cells", 1)
         self.bounds_pub = self.create_publisher(Marker, "/kilin/terrain/local_window/bounds", 1)
@@ -99,6 +109,10 @@ class LocalTerrain(Node):
 
     def odom(self, message):
         self.pose = message
+
+    def _static_tf_callback(self, message):
+        for transform in message.transforms:
+            self.tf_buffer.set_transform_static(transform, "kilin_terrain_static_frames")
 
     def cloud_callback(self, message):
         raw = point_cloud2.read_points(message, field_names=("x", "y", "z"), skip_nans=True)
@@ -140,9 +154,7 @@ class LocalTerrain(Node):
     def _front_roi_points(self, points):
         if not bool(self.get_parameter("front_roi.enabled").value):
             return points
-        output_frame = str(self.get_parameter("output_frame").value)
-        roi_frame = str(self.get_parameter("front_roi.frame").value)
-        hip_points = self._transform_to_frame(points, output_frame, roi_frame)
+        hip_points = self._output_to_hip_points(points)
         if hip_points is None:
             return None
         kept = front_roi(
@@ -170,9 +182,7 @@ class LocalTerrain(Node):
         points = np.vstack([entry[1] for entry in self.cloud_buffer])
         if not bool(self.get_parameter("retain_observed_terrain").value):
             return points
-        output_frame = str(self.get_parameter("output_frame").value)
-        roi_frame = str(self.get_parameter("front_roi.frame").value)
-        hip_points = self._transform_to_frame(points, output_frame, roi_frame)
+        hip_points = self._output_to_hip_points(points)
         if hip_points is None:
             return None
         margin = float(self.get_parameter("retained_terrain.margin_m").value)
@@ -189,6 +199,24 @@ class LocalTerrain(Node):
                 (hip_points[:, 0] <= float(self.get_parameter("forward_m").value) + margin) &
                 (np.abs(hip_points[:, 1]) <= float(self.get_parameter("half_width_m").value) + margin))
         return points[keep]
+
+    def _output_to_hip_points(self, points):
+        """Express fixed-frame points in the current corrected hip frame."""
+        if self.pose is None:
+            return None
+        output_frame = str(self.get_parameter("output_frame").value)
+        hip_frame = str(self.get_parameter("front_roi.frame").value)
+        if self.pose.header.frame_id != output_frame or self.pose.child_frame_id != hip_frame:
+            self.get_logger().error(
+                f"Corrected odometry must be {output_frame}->{hip_frame}, got "
+                f"{self.pose.header.frame_id}->{self.pose.child_frame_id}",
+                throttle_duration_sec=2.0,
+            )
+            return None
+        pose = self.pose.pose.pose
+        rotation = _rotation_matrix(pose.orientation)
+        translation = np.array([pose.position.x, pose.position.y, pose.position.z])
+        return (points - translation) @ rotation
 
     def _ground_height_gate(self, points):
         """Reject overhead/deep points using the current hip-axis map height."""
