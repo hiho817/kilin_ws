@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Run one safe, offline terrain-window/planner-shadow replay.
-set -euo pipefail
+# ROS Humble setup scripts reference optional unset variables, so enable
+# nounset only after sourcing the ROS and workspace overlays below.
+set -eo pipefail
 
 usage() {
   cat <<'EOF'
@@ -11,7 +13,7 @@ Options:
   --terrain-resolution-m M    Terrain cell size (default: 0.10)
   --rate R                    rosbag replay rate (default: 1.0)
   --record-derived            Record derived debug topics; never copies raw LiDAR/IMU
-  --output-root DIRECTORY     Default: ~/kilin_ws/logs/2026-08-27/lidar_terrain_trials/replay_runs
+  --output-root DIRECTORY     Default: ~/kilin_ws/logs/2026-08-27
 
 The launch is unarmed and writes only to /kilin/terrain_shadow/motor_command.
 The bag player publishes only /livox/lidar, /livox/imu, and /motor/state.
@@ -24,7 +26,7 @@ rate="1.0"
 record_derived=false
 terrain_resolution_m="0.10"
 ros_ws="${KILIN_ROS_WS:-$HOME/kilin_ws/kilin_ros_ws}"
-output_root="${KILIN_TERRAIN_REPLAY_ROOT:-$HOME/kilin_ws/logs/2026-08-27/lidar_terrain_trials/replay_runs}"
+output_root="${KILIN_TERRAIN_REPLAY_ROOT:-$HOME/kilin_ws/logs/2026-08-27}"
 fastlio_config="$ros_ws/src/kilin_fastlio_bringup/config/fastlio_mid360s_terrain_balanced.yaml"
 
 while [[ $# -gt 0 ]]; do
@@ -53,6 +55,7 @@ if [[ -f "$HOME/kilin_ws/offline_livox_interfaces/install/setup.bash" ]]; then
   source "$HOME/kilin_ws/offline_livox_interfaces/install/setup.bash"
 fi
 source "$ros_ws/install/setup.bash"
+set -u
 
 run_dir="$output_root/$label"
 mkdir -p "$run_dir"
