@@ -66,7 +66,9 @@ starts from its standard shape, rotates joint 1 toward the shortest correction,
 then interpolates joints 2--7 from `standard_pose_deg` toward
 `full_extension_pose_deg` in `com_alpha_step` increments. After every PTP result,
 the latest support geometry is evaluated again. Playback resumes only after the
-margin is at least `com_safe_margin_m` for `com_safe_hold_sec` continuously. If
+margin is at least the current entry in `com_safe_margin_by_phase_m` (FL, FR,
+RL, RR), or the backward-compatible `com_safe_margin_m` fallback when the array
+is empty, for `com_safe_hold_sec` continuously. If
 full extension is still unsafe, missing/stale geometry exceeds the timeout, or a
 PTP goal fails, playback stops.
 

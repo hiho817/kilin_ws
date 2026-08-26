@@ -82,6 +82,8 @@ public:
     declare_parameter<double>("balance_state_timeout_sec", 0.5);
     declare_parameter<bool>("require_balance_orientation", false);
     declare_parameter<double>("com_safe_margin_m", 0.01);
+    declare_parameter<std::vector<double>>(
+      "com_safe_margin_by_phase_m", std::vector<double>{});
     declare_parameter<double>("com_alpha_step", 0.05);
     declare_parameter<double>("com_safe_hold_sec", 0.3);
     declare_parameter<double>("amr_yaw_in_world_deg", 0.0);
@@ -123,6 +125,17 @@ public:
     balance_state_timeout_sec_ = get_parameter("balance_state_timeout_sec").as_double();
     require_balance_orientation_ = get_parameter("require_balance_orientation").as_bool();
     com_safe_margin_m_ = get_parameter("com_safe_margin_m").as_double();
+    const auto configured_phase_margins =
+      get_parameter("com_safe_margin_by_phase_m").as_double_array();
+    com_safe_margin_by_phase_m_.fill(com_safe_margin_m_);
+    if (!configured_phase_margins.empty()) {
+      if (configured_phase_margins.size() != com_safe_margin_by_phase_m_.size()) {
+        throw std::runtime_error("com_safe_margin_by_phase_m must contain exactly 4 values");
+      }
+      std::copy(
+        configured_phase_margins.begin(), configured_phase_margins.end(),
+        com_safe_margin_by_phase_m_.begin());
+    }
     com_alpha_step_ = get_parameter("com_alpha_step").as_double();
     com_safe_hold_sec_ = get_parameter("com_safe_hold_sec").as_double();
     amr_yaw_in_world_rad_ = get_parameter("amr_yaw_in_world_deg").as_double() * M_PI / 180.0;
@@ -156,6 +169,9 @@ public:
       invalid_compensation_pose ||
       (arm_control_mode_ != "fixed_phase" && arm_control_mode_ != "com_closed_loop") ||
       balance_state_timeout_sec_ <= 0.0 || com_safe_margin_m_ < 0.0 ||
+      std::any_of(
+        com_safe_margin_by_phase_m_.begin(), com_safe_margin_by_phase_m_.end(),
+        [](double margin) {return !std::isfinite(margin) || margin < 0.0;}) ||
       com_alpha_step_ <= 0.0 || com_alpha_step_ > 1.0 || com_safe_hold_sec_ < 0.0 ||
       !std::isfinite(amr_yaw_in_world_rad_) || !std::isfinite(arm_base_yaw_offset_rad_))
     {
@@ -229,9 +245,14 @@ public:
     if (closed_loop_arm_) {
       RCLCPP_INFO(
         get_logger(),
-        "COM input: %s, safe margin: %.1f mm, alpha step: %.3f, AMR yaw: %.2f deg, "
+        "COM input: %s, safe margins P1-P4: [%.1f, %.1f, %.1f, %.1f] mm, "
+        "alpha step: %.3f, AMR yaw: %.2f deg, "
         "arm base yaw offset: %.2f deg",
-        balance_state_topic_.c_str(), com_safe_margin_m_ * 1000.0, com_alpha_step_,
+        balance_state_topic_.c_str(),
+        com_safe_margin_by_phase_m_[0] * 1000.0,
+        com_safe_margin_by_phase_m_[1] * 1000.0,
+        com_safe_margin_by_phase_m_[2] * 1000.0,
+        com_safe_margin_by_phase_m_[3] * 1000.0, com_alpha_step_,
         amr_yaw_in_world_rad_ * 180.0 / M_PI,
         arm_base_yaw_offset_rad_ * 180.0 / M_PI);
     }
@@ -819,6 +840,14 @@ private:
     return pose;
   }
 
+  double active_com_safe_margin() const
+  {
+    if (active_arm_phase_ < 1 || active_arm_phase_ > 4) {
+      return com_safe_margin_m_;
+    }
+    return com_safe_margin_by_phase_m_.at(static_cast<std::size_t>(active_arm_phase_ - 1));
+  }
+
   std::optional<kilin_stair_controller::geometry::StabilityResult> latest_stability(
     bool require_recent)
   {
@@ -853,7 +882,7 @@ private:
       }
       return kilin_stair_controller::geometry::evaluate_stability(
         {latest_balance_state_.com.x, latest_balance_state_.com.y}, wheels,
-        active_arm_phase_, com_safe_margin_m_);
+        active_arm_phase_, active_com_safe_margin());
     } catch (const std::exception & error) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000, "Invalid balance geometry: %s", error.what());
@@ -886,7 +915,7 @@ private:
     msg.inside = stability.inside_support;
     msg.safe = stability.inside_safe_region;
     msg.stability_margin = stability.signed_margin;
-    msg.required_margin = com_safe_margin_m_;
+    msg.required_margin = active_com_safe_margin();
     msg.com_projection = latest_balance_state_.com;
     for (const auto & point : stability.hull) {
       geometry_msgs::msg::Point32 output;
@@ -1261,6 +1290,7 @@ private:
   double balance_state_timeout_sec_{};
   bool require_balance_orientation_{false};
   double com_safe_margin_m_{};
+  std::array<double, 4> com_safe_margin_by_phase_m_{};
   double com_alpha_step_{};
   double com_safe_hold_sec_{};
   double amr_yaw_in_world_rad_{};
