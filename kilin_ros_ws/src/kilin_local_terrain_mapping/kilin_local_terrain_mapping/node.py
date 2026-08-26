@@ -88,7 +88,11 @@ class LocalTerrain(Node):
             self.declare_parameter(name, value)
         self.pose = None
         self.cloud_buffer = deque()
-        self.cloud_stamp_ns = None
+        # Header stamps retain sensor time for the rolling terrain memory.
+        # Freshness is deliberately based on local receipt time: a recorded
+        # FAST-LIO cloud preserves the bag's original sensor timestamp, which
+        # need not share an epoch with the replay node's clock.
+        self.cloud_received_ns = None
         # Registered clouds are fixed-frame (camera_init) points.  Only the
         # static map->camera_init calibration is needed for that conversion;
         # map->hip_axis_center is taken directly from corrected odometry below.
@@ -123,7 +127,7 @@ class LocalTerrain(Node):
             return
         # Fresh sensor input keeps a previously observed, still-local terrain
         # patch usable even if this particular scan has no new ROI points.
-        self.cloud_stamp_ns = stamp_ns
+        self.cloud_received_ns = self.get_clock().now().nanoseconds
         # Gate points in the instantaneous body-fixed front ROI before they
         # enter memory.  This retains only causal terrain observations and
         # excludes the body/rear hemisphere from the terrain product.
@@ -264,10 +268,10 @@ class LocalTerrain(Node):
         if str(self.get_parameter("terrain_source").value) == "analytic":
             elevation, valid = self._ramp(x, y, "analytic_ramp"), np.ones_like(x, dtype=bool)
         else:
-            if self.cloud_stamp_ns is None:
+            if self.cloud_received_ns is None:
                 self.get_logger().warning("Waiting for a FAST-LIO terrain cloud", throttle_duration_sec=2.0)
                 return
-            if self.get_clock().now().nanoseconds - self.cloud_stamp_ns > int(float(self.get_parameter("max_cloud_age_s").value) * 1e9):
+            if self.get_clock().now().nanoseconds - self.cloud_received_ns > int(float(self.get_parameter("max_cloud_age_s").value) * 1e9):
                 self.get_logger().warning("Terrain cloud is stale; withholding terrain window", throttle_duration_sec=2.0)
                 return
             points = self._retained_window_points()
