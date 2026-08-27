@@ -23,6 +23,11 @@ from .hip_test import (
 )
 from .odometry_math import relative_planar_pose
 from .ramp_model import OneSidedRamp, OneSidedRampSequence
+from .terrain_window_policy import (
+    fill_isolated_unknown_nodes,
+    infer_flat_height_ahead,
+    seed_initial_flat_support,
+)
 
 
 class KnownTerrainController(Node):
@@ -117,6 +122,10 @@ class KnownTerrainController(Node):
         self._warned_waiting_for_feedback = False
         self._latest_odom = None
         self._latest_terrain = None
+        # Fixed map-frame patch inferred once from the verified initial flat
+        # stance.  It is not translated with the robot or used as a general
+        # replacement for unobserved terrain.
+        self._initial_flat_support = None
         self._target_speed_m_s = None
         self._active_speed_m_s = 0.0
         self._last_speed_command_time = None
@@ -199,6 +208,17 @@ class KnownTerrainController(Node):
             "odometry_relative_origin": False,
             "use_terrain_window": False,
             "terrain_window_topic": "/kilin/terrain/local_window",
+            "live_terrain.initial_flat_support.enabled": True,
+            "live_terrain.initial_flat_support.rear_m": 0.65,
+            # Covers the initial five-knot preview plus the approximately
+            # 0.6 m near-field LiDAR blind strip seen on the real MID360s.
+            "live_terrain.initial_flat_support.forward_m": 0.75,
+            "live_terrain.initial_flat_support.half_width_m": 0.50,
+            "live_terrain.initial_flat_support.measurement_min_forward_m": 0.20,
+            "live_terrain.initial_flat_support.measurement_max_forward_m": 0.80,
+            "live_terrain.initial_flat_support.maximum_height_span_m": 0.05,
+            "live_terrain.isolated_hole_fill.enabled": True,
+            "live_terrain.isolated_hole_fill.maximum_height_span_m": 0.08,
             "use_speed_command": False,
             "speed_command_topic": "/kilin/control/target_speed_m_s",
             "speed_command_max_m_s": 0.30,
@@ -612,6 +632,73 @@ class KnownTerrainController(Node):
         with self._lock:
             self._latest_terrain = message
 
+    def _condition_live_terrain(self, terrain, x_m: float, y_m: float, yaw_rad: float):
+        """Apply bounded initial-support seeding and isolated-node repair."""
+
+        heights = terrain.heights_m
+        valid = terrain.valid_mask
+        if bool(self.get_parameter("live_terrain.initial_flat_support.enabled").value):
+            if self._initial_flat_support is None:
+                flat_height = infer_flat_height_ahead(
+                    terrain.x_coordinates_m,
+                    terrain.y_coordinates_m,
+                    heights,
+                    valid,
+                    origin_x_m=x_m,
+                    origin_y_m=y_m,
+                    yaw_rad=yaw_rad,
+                    minimum_forward_m=float(self.get_parameter("live_terrain.initial_flat_support.measurement_min_forward_m").value),
+                    maximum_forward_m=float(self.get_parameter("live_terrain.initial_flat_support.measurement_max_forward_m").value),
+                    half_width_m=float(self.get_parameter("live_terrain.initial_flat_support.half_width_m").value),
+                    maximum_height_span_m=float(self.get_parameter("live_terrain.initial_flat_support.maximum_height_span_m").value),
+                )
+                if flat_height is not None:
+                    self._initial_flat_support = (x_m, y_m, yaw_rad, flat_height, terrain.frame_id)
+                    self.get_logger().info(
+                        "Live terrain: seeded initial flat support patch from observed terrain ahead "
+                        f"at z={flat_height:.3f} m in frame {terrain.frame_id!r}"
+                    )
+                else:
+                    self.get_logger().warning(
+                        "Live terrain: initial support is unknown and the front reference strip is not "
+                        "flat/observed; retaining the terrain safety fallback",
+                        throttle_duration_sec=2.0,
+                    )
+            if self._initial_flat_support is not None:
+                origin_x, origin_y, origin_yaw, flat_height, frame_id = self._initial_flat_support
+                if frame_id == terrain.frame_id:
+                    heights, valid, filled = seed_initial_flat_support(
+                        terrain.x_coordinates_m,
+                        terrain.y_coordinates_m,
+                        heights,
+                        valid,
+                        origin_x_m=origin_x,
+                        origin_y_m=origin_y,
+                        yaw_rad=origin_yaw,
+                        flat_height_m=flat_height,
+                        rear_m=float(self.get_parameter("live_terrain.initial_flat_support.rear_m").value),
+                        forward_m=float(self.get_parameter("live_terrain.initial_flat_support.forward_m").value),
+                        half_width_m=float(self.get_parameter("live_terrain.initial_flat_support.half_width_m").value),
+                    )
+                    if filled:
+                        self.get_logger().debug(f"Live terrain: filled {filled} initial flat-support nodes")
+        if bool(self.get_parameter("live_terrain.isolated_hole_fill.enabled").value):
+            heights, valid, filled = fill_isolated_unknown_nodes(
+                heights,
+                valid,
+                maximum_height_span_m=float(self.get_parameter("live_terrain.isolated_hole_fill.maximum_height_span_m").value),
+            )
+            if filled:
+                self.get_logger().debug(f"Live terrain: repaired {filled} isolated unknown nodes")
+        return self._ElevationWindow(
+            x_coordinates_m=terrain.x_coordinates_m,
+            y_coordinates_m=terrain.y_coordinates_m,
+            heights_m=heights,
+            valid_mask=valid,
+            timestamp_s=terrain.timestamp_s,
+            frame_id=terrain.frame_id,
+        )
+
     def _speed_callback(self, message: Float32) -> None:
         if np.isfinite(message.data):
             with self._lock:
@@ -986,6 +1073,7 @@ class KnownTerrainController(Node):
                 values = np.asarray(window.elevation_m, dtype=float).reshape((window.height, window.width))
                 valid = np.asarray(window.valid, dtype=bool).reshape((window.height, window.width))
                 terrain = self._ElevationWindow(x_coordinates_m=wx, y_coordinates_m=wy, heights_m=values, valid_mask=valid, timestamp_s=elapsed, frame_id=window.header.frame_id)
+                terrain = self._condition_live_terrain(terrain, x, y, yaw)
             result = self._session.plan_cycle(path=path, terrain=terrain)
             self._publish_debug_plan(path, debug_frame_id)
             with self._lock:

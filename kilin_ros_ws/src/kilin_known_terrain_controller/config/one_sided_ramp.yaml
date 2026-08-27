@@ -1,0 +1,87 @@
+kilin_known_terrain_controller:
+  ros__parameters:
+    use_sim_time: true
+    armed: false
+    mode: disabled
+    command_topic: /kilin/motor_cmd_raw
+    feedback_source: motor_state
+    motor_state_topic: /motor/state
+    use_odometry: false
+    odometry_topic: /kilin/fastlio/odometry
+    odometry_timeout_s: 0.5
+    odometry_required_frame: ''
+    odometry_relative_origin: false
+    use_terrain_window: false
+    terrain_window_topic: /kilin/terrain/local_window
+    # Live-LiDAR startup policy.  The mapper cannot observe directly beneath
+    # the chassis; infer this one fixed support patch only from a verified flat
+    # strip immediately ahead.  It is not a fallback for later unknown terrain.
+    live_terrain.initial_flat_support.enabled: true
+    live_terrain.initial_flat_support.rear_m: 0.65
+    live_terrain.initial_flat_support.forward_m: 0.75
+    live_terrain.initial_flat_support.half_width_m: 0.50
+    live_terrain.initial_flat_support.measurement_min_forward_m: 0.20
+    live_terrain.initial_flat_support.measurement_max_forward_m: 0.80
+    live_terrain.initial_flat_support.maximum_height_span_m: 0.05
+    # Repair only a single node with four agreeing cardinal neighbours.
+    live_terrain.isolated_hole_fill.enabled: true
+    live_terrain.isolated_hole_fill.maximum_height_span_m: 0.08
+    use_speed_command: true
+    speed_command_topic: /kilin/control/target_speed_m_s
+    speed_command_max_m_s: 0.30
+    # Zero selects direct speed steps for this suspension-equipped Isaac test.
+    speed_command_accel_limit_m_s2: 0.0
+    speed_command_timeout_s: 0.5
+    initial_x_m: 0.0
+    initial_y_m: 0.0
+    initial_yaw_rad: 0.0
+    speed_m_s: 0.18
+    startup_delay_s: 1.0
+    run_duration_s: 22.0
+    hard_motion_limit_s: 22.0
+    planning_rate_hz: 10.0
+    publish_rate_hz: 50.0
+    planner_dt_s: 0.1
+    horizon_steps: 5
+    horizon_knot_spacing_m: 0.05
+    planner_deadline_s: 0.6
+    map_resolution_m: 0.025
+    map_margin_x_m: 0.8
+    map_half_width_m: 0.7
+    ramp.height_m: 0.08
+    ramp.start_x_m: 0.75
+    ramp.up_ramp_length_m: 0.30
+    ramp.deck_length_m: 0.35
+    ramp.down_ramp_length_m: 0.30
+    ramp.track_center_y_m: 0.25
+    ramp.track_width_m: 0.34
+    ramp.second.enabled: true
+    ramp.second.height_m: 0.08
+    ramp.second.start_x_m: 2.70
+    ramp.second.up_ramp_length_m: 0.30
+    ramp.second.deck_length_m: 0.35
+    ramp.second.down_ramp_length_m: 0.30
+    ramp.second.track_center_y_m: -0.25
+    feedback_timeout_s: 0.5
+    hip_test.delta_deg: [5.0, 5.0, -5.0, -5.0]
+    hip_test.rate_deg_s: 8.0
+    hip_test.tolerance_deg: 0.5
+    hip_test.hold_s: 2.0
+    hip_calibration.delta_deg: [-3.0, -3.0, 3.0, 3.0]
+    hip_calibration.rate_deg_s: 6.0
+    hip_calibration.hold_s: 1.0
+    wheel_calibration.speed_rad_s: 0.5
+    wheel_calibration.pre_drive_hold_s: 1.0
+    wheel_calibration.drive_s: 1.0
+    known_ramp.max_initial_hip_error_deg: 5.0
+    known_ramp.auto_initialize_stance: true
+    known_ramp.hip_rate_limit_deg_s: 144.0
+    known_ramp.command_smoothing_s: 0.20
+    planner_posture_test.duration_s: 4.0
+    stance.target_deg: [-45.0, -45.0, 45.0, 45.0]
+    stance.hip_rate_deg_s: 15.0
+    stance.hip_to_wheel_m: 0.260
+    stance.wheel_radius_m: 0.0585
+    stance.tolerance_deg: 0.5
+    stance.hold_s: 1.0
+    rest_mode: 0
