@@ -1,0 +1,142 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+  - Class: rviz_common/Time
+    Name: Time
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Frame Timeout: 15
+      Marker Scale: 0.20
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: false
+    - Class: rviz_default_plugins/Odometry
+      Enabled: true
+      Keep: 100
+      Name: Hip-centre odometry
+      Position Tolerance: 0.02
+      Shape:
+        Alpha: 1
+        Axes Length: 0.25
+        Axes Radius: 0.02
+        Color: 255; 170; 0
+        Head Length: 0.08
+        Head Radius: 0.04
+        Shaft Length: 0.20
+        Shaft Radius: 0.015
+        Value: Arrow
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /kilin/fastlio/odometry
+    - Alpha: 0.45
+      Autocompute Intensity Bounds: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 190; 190; 190
+      Color Transformer: AxisColor
+      Decay Time: 1.0
+      Enabled: true
+      Name: FAST-LIO registered cloud
+      Position Transformer: XYZ
+      Size (m): 0.025
+      Style: Points
+      Topic:
+        Depth: 2
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /cloud_registered
+      Use Fixed Frame: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 0; 255; 80
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Name: Planner terrain cells
+      Position Transformer: XYZ
+      Size (m): 0.07
+      Style: Flat Squares
+      Topic:
+        Depth: 2
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /kilin/terrain/local_window/cells
+      Use Fixed Frame: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Terrain-window bounds
+      Topic:
+        Depth: 2
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /kilin/terrain/local_window/bounds
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 0; 120; 255
+      Enabled: true
+      Head Diameter: 0.08
+      Head Length: 0.08
+      Length: 0.10
+      Line Style: Lines
+      Line Width: 0.03
+      Name: Planned five-knot horizon
+      Pose Style: Arrows
+      Pose Arrow Color: 0; 120; 255
+      Pose Arrow Length: 0.12
+      Pose Arrow Shaft Diameter: 0.02
+      Pose Arrow Head Diameter: 0.05
+      Pose Arrow Head Length: 0.05
+      Topic:
+        Depth: 2
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /kilin/planner/debug/horizon
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Planned body footprints
+      Topic:
+        Depth: 2
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /kilin/planner/debug/footprints
+  Enabled: true
+  Global Options:
+    Background Color: 255; 255; 255
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 4
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Pitch: 0.65
+      Yaw: 0.75

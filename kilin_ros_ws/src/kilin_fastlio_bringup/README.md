@@ -75,3 +75,39 @@ reduce registration load.
 
 If the mechanical mount changes, update `config/robot_frames.yaml`; do not put
 this robot-mount transform in FAST-LIO's LiDAR-to-IMU extrinsic parameters.
+
+## Safe server replay and RViz preview
+
+Use the unarmed replay helper to inspect raw-bag terrain perception and the
+shadow planner.  It publishes only to `/kilin/terrain_shadow/motor_command`;
+it never commands a robot.  Start RViz first:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/kilin_ws/kilin_ros_ws/install/setup.bash
+rviz2 -d "$(ros2 pkg prefix kilin_fastlio_bringup)/share/kilin_fastlio_bringup/rviz/terrain_planner_replay.rviz" \
+  --ros-args -p use_sim_time:=true
+```
+
+Then run the validated dense profile and 0.10 m terrain grid:
+
+```bash
+ros2 run kilin_fastlio_bringup run_terrain_shadow_replay.sh \
+  --bag ~/kilin_ws/logs/2026-08-26/ramp_test03/bag \
+  --label server_rviz_preview_01 \
+  --fastlio-config ~/kilin_ws/kilin_ros_ws/src/kilin_fastlio_bringup/config/fastlio_mid360s_terrain_dense_runtime.yaml \
+  --terrain-resolution-m 0.10 \
+  --visualize-non-nominal-stance
+```
+
+The RViz layout uses fixed frame `map` and displays the registered cloud,
+filtered terrain cells, terrain-window bounds, corrected hip-centre odometry,
+five-knot planned horizon, and planned body footprints.  It does not yet draw
+commanded/motor/absolute hip angles as a RobotModel; those require a separate
+motor-state-to-joint-state visualizer.
+
+`--visualize-non-nominal-stance` is for RViz replay only.  It relaxes the
+initial 45-degree stance gate because replayed feedback cannot move an
+unarmed robot into that stance.  The helper remains unarmed and publishes only
+to its isolated shadow command topic; never use this flag for a control or
+safety validation.

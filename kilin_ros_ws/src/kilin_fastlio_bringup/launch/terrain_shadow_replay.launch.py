@@ -39,6 +39,15 @@ def generate_launch_description():
         DeclareLaunchArgument("speed_m_s", default_value="0.10"),
         DeclareLaunchArgument("planner_debug", default_value="true"),
         DeclareLaunchArgument("terrain_resolution_m", default_value="0.10"),
+        DeclareLaunchArgument(
+            "shadow_initial_hip_error_limit_deg",
+            default_value="5.0",
+            description=(
+                "Replay-only initial-stance gate. Keep 5.0 for safety-equivalent "
+                "shadow checks; use 180 only to visualize a recorded bag whose "
+                "unarmed hips cannot transition to the nominal stance."
+            ),
+        ),
         Node(
             package="fast_lio", executable="fastlio_mapping", name="fastlio_mapping",
             output="screen", parameters=[LaunchConfiguration("fastlio_config"), {"use_sim_time": True}],
@@ -70,8 +79,15 @@ def generate_launch_description():
                     "command_topic": "/kilin/terrain_shadow/motor_command",
                     "feedback_source": "motor_state", "motor_state_topic": "/motor/state",
                     "use_odometry": True, "odometry_topic": "/kilin/fastlio/odometry",
-                    "odometry_required_frame": "map", "odometry_relative_origin": True,
+                    # The live TerrainWindow is expressed in FAST-LIO's map
+                    # frame.  Keep the shadow path in that same frame so RViz
+                    # and the planner never compare it with a synthetic
+                    # known_map origin.
+                    "odometry_required_frame": "map", "odometry_relative_origin": False,
                     "use_terrain_window": True,
+                    "known_ramp.max_initial_hip_error_deg": LaunchConfiguration(
+                        "shadow_initial_hip_error_limit_deg"
+                    ),
                     "use_speed_command": False, "speed_m_s": LaunchConfiguration("speed_m_s"),
                     "run_duration_s": 30.0, "hard_motion_limit_s": 35.0,
                     "debug_publish_enabled": LaunchConfiguration("planner_debug"),

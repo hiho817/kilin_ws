@@ -18,6 +18,9 @@ Options:
   --terrain-resolution-m M    Terrain cell size (default: 0.10)
   --rate R                    rosbag replay rate (default: 1.0)
   --record-derived            Record derived debug topics; never copies raw LiDAR/IMU
+  --visualize-non-nominal-stance
+                              Replay-only: render a planner horizon even when the
+                              recorded unarmed hips are not at nominal 45 degrees
   --output-root DIRECTORY     Default: ~/kilin_ws/logs/2026-08-27
 
 The launch is unarmed and writes only to /kilin/terrain_shadow/motor_command.
@@ -29,6 +32,7 @@ bag=""
 label=""
 rate="1.0"
 record_derived=false
+visualize_non_nominal_stance=false
 terrain_resolution_m="0.10"
 ros_ws="${KILIN_ROS_WS:-$HOME/kilin_ws/kilin_ros_ws}"
 output_root="${KILIN_TERRAIN_REPLAY_ROOT:-$HOME/kilin_ws/logs/2026-08-27}"
@@ -42,6 +46,7 @@ while [[ $# -gt 0 ]]; do
     --terrain-resolution-m) terrain_resolution_m="$2"; shift 2 ;;
     --rate) rate="$2"; shift 2 ;;
     --record-derived) record_derived=true; shift ;;
+    --visualize-non-nominal-stance) visualize_non_nominal_stance=true; shift ;;
     --output-root) output_root="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -64,8 +69,8 @@ set -u
 
 run_dir="$output_root/$label"
 mkdir -p "$run_dir"
-printf 'bag=%q\nlabel=%q\nrate=%q\nfastlio_config=%q\nterrain_resolution_m=%q\nrecord_derived=%q\npython_user_site=%q\n' \
-  "$bag" "$label" "$rate" "$fastlio_config" "$terrain_resolution_m" "$record_derived" "$PYTHONNOUSERSITE" > "$run_dir/run.env"
+printf 'bag=%q\nlabel=%q\nrate=%q\nfastlio_config=%q\nterrain_resolution_m=%q\nrecord_derived=%q\nvisualize_non_nominal_stance=%q\npython_user_site=%q\n' \
+  "$bag" "$label" "$rate" "$fastlio_config" "$terrain_resolution_m" "$record_derived" "$visualize_non_nominal_stance" "$PYTHONNOUSERSITE" > "$run_dir/run.env"
 sha256sum "$fastlio_config" >> "$run_dir/run.env"
 
 launch_pid=""
@@ -77,8 +82,15 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-ros2 launch kilin_fastlio_bringup terrain_shadow_replay.launch.py \
-  fastlio_config:="$fastlio_config" terrain_resolution_m:="$terrain_resolution_m" \
+launch_args=(
+  fastlio_config:="$fastlio_config"
+  terrain_resolution_m:="$terrain_resolution_m"
+)
+if [[ "$visualize_non_nominal_stance" == true ]]; then
+  launch_args+=(shadow_initial_hip_error_limit_deg:=180.0)
+fi
+
+ros2 launch kilin_fastlio_bringup terrain_shadow_replay.launch.py "${launch_args[@]}" \
   > "$run_dir/launch.log" 2>&1 &
 launch_pid=$!
 

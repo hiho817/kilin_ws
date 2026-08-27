@@ -8,7 +8,7 @@ install(PROGRAMS
   scripts/run_terrain_shadow_replay.sh
   DESTINATION lib/${PROJECT_NAME})
 
-install(DIRECTORY config launch
+install(DIRECTORY config launch rviz
   DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
