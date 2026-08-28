@@ -84,6 +84,8 @@ public:
     declare_parameter<double>("com_safe_margin_m", 0.01);
     declare_parameter<std::vector<double>>(
       "com_safe_margin_by_phase_m", std::vector<double>{});
+    declare_parameter<std::vector<double>>(
+      "com_min_alpha_by_phase", std::vector<double>{});
     declare_parameter<double>("com_alpha_step", 0.05);
     declare_parameter<double>("com_safe_hold_sec", 0.3);
     declare_parameter<double>("amr_yaw_in_world_deg", 0.0);
@@ -136,6 +138,17 @@ public:
         configured_phase_margins.begin(), configured_phase_margins.end(),
         com_safe_margin_by_phase_m_.begin());
     }
+    const auto configured_min_alphas =
+      get_parameter("com_min_alpha_by_phase").as_double_array();
+    com_min_alpha_by_phase_.fill(0.0);
+    if (!configured_min_alphas.empty()) {
+      if (configured_min_alphas.size() != com_min_alpha_by_phase_.size()) {
+        throw std::runtime_error("com_min_alpha_by_phase must contain exactly 4 values");
+      }
+      std::copy(
+        configured_min_alphas.begin(), configured_min_alphas.end(),
+        com_min_alpha_by_phase_.begin());
+    }
     com_alpha_step_ = get_parameter("com_alpha_step").as_double();
     com_safe_hold_sec_ = get_parameter("com_safe_hold_sec").as_double();
     amr_yaw_in_world_rad_ = get_parameter("amr_yaw_in_world_deg").as_double() * M_PI / 180.0;
@@ -172,6 +185,9 @@ public:
       std::any_of(
         com_safe_margin_by_phase_m_.begin(), com_safe_margin_by_phase_m_.end(),
         [](double margin) {return !std::isfinite(margin) || margin < 0.0;}) ||
+      std::any_of(
+        com_min_alpha_by_phase_.begin(), com_min_alpha_by_phase_.end(),
+        [](double alpha) {return !std::isfinite(alpha) || alpha < 0.0 || alpha > 1.0;}) ||
       com_alpha_step_ <= 0.0 || com_alpha_step_ > 1.0 || com_safe_hold_sec_ < 0.0 ||
       !std::isfinite(amr_yaw_in_world_rad_) || !std::isfinite(arm_base_yaw_offset_rad_))
     {
@@ -246,13 +262,15 @@ public:
       RCLCPP_INFO(
         get_logger(),
         "COM input: %s, safe margins P1-P4: [%.1f, %.1f, %.1f, %.1f] mm, "
-        "alpha step: %.3f, AMR yaw: %.2f deg, "
+        "minimum alphas: [%.2f, %.2f, %.2f, %.2f], alpha step: %.3f, AMR yaw: %.2f deg, "
         "arm base yaw offset: %.2f deg",
         balance_state_topic_.c_str(),
         com_safe_margin_by_phase_m_[0] * 1000.0,
         com_safe_margin_by_phase_m_[1] * 1000.0,
         com_safe_margin_by_phase_m_[2] * 1000.0,
-        com_safe_margin_by_phase_m_[3] * 1000.0, com_alpha_step_,
+        com_safe_margin_by_phase_m_[3] * 1000.0,
+        com_min_alpha_by_phase_[0], com_min_alpha_by_phase_[1],
+        com_min_alpha_by_phase_[2], com_min_alpha_by_phase_[3], com_alpha_step_,
         amr_yaw_in_world_rad_ * 180.0 / M_PI,
         arm_base_yaw_offset_rad_ * 180.0 / M_PI);
     }
@@ -848,6 +866,14 @@ private:
     return com_safe_margin_by_phase_m_.at(static_cast<std::size_t>(active_arm_phase_ - 1));
   }
 
+  double active_com_min_alpha() const
+  {
+    if (active_arm_phase_ < 1 || active_arm_phase_ > 4) {
+      return 0.0;
+    }
+    return com_min_alpha_by_phase_.at(static_cast<std::size_t>(active_arm_phase_ - 1));
+  }
+
   std::optional<kilin_stair_controller::geometry::StabilityResult> latest_stability(
     bool require_recent)
   {
@@ -1077,10 +1103,19 @@ private:
             active_arm_phase_, current_arm_waypoint().alpha,
             stability->signed_margin * 1000.0,
             stability->inside_safe_region ? "true" : "false");
-          if (stability->inside_safe_region) {
+          const bool minimum_extension_reached =
+            current_arm_waypoint().alpha + 1e-9 >= active_com_min_alpha();
+          if (stability->inside_safe_region && minimum_extension_reached) {
             safe_hold_pending_ = true;
             safe_hold_start_time_ = get_clock()->now();
           } else {
+            if (stability->inside_safe_region) {
+              RCLCPP_INFO(
+                get_logger(),
+                "Phase %d is geometrically safe but alpha %.3f is below minimum %.3f; "
+                "continuing extension.",
+                active_arm_phase_, current_arm_waypoint().alpha, active_com_min_alpha());
+            }
             advance_closed_loop_waypoint();
           }
           return;
@@ -1291,6 +1326,7 @@ private:
   bool require_balance_orientation_{false};
   double com_safe_margin_m_{};
   std::array<double, 4> com_safe_margin_by_phase_m_{};
+  std::array<double, 4> com_min_alpha_by_phase_{};
   double com_alpha_step_{};
   double com_safe_hold_sec_{};
   double amr_yaw_in_world_rad_{};

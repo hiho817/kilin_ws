@@ -72,6 +72,10 @@ is empty, for `com_safe_hold_sec` continuously. If
 full extension is still unsafe, missing/stale geometry exceeds the timeout, or a
 PTP goal fails, playback stops.
 
+`com_min_alpha_by_phase` optionally sets a minimum extension fraction for FL,
+FR, RL, and RR. Once COM correction starts, playback resumes only when both the
+phase's minimum alpha and its safe margin are satisfied.
+
 In simulation, input positions and COM are expected in the world frame.
 `amr_yaw_in_world_deg` rotates that world correction into the AMR frame before
 J1 is selected. Keep it at zero while AMR +X and world +X are aligned. Hardware
