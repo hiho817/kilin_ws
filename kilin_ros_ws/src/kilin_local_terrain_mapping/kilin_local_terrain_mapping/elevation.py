@@ -49,10 +49,32 @@ def voxel_downsample(points_m, voxel_m):
     return points[np.sort(indices)]
 
 
-def grid_coordinates(center_x_m, center_y_m, forward_m, rear_m, half_width_m, resolution_m):
-    """Return map-frame grid axes centered laterally on the robot."""
-    xs = np.arange(center_x_m - rear_m, center_x_m + forward_m + resolution_m * 0.1, resolution_m)
-    ys = np.arange(center_y_m - half_width_m, center_y_m + half_width_m + resolution_m * 0.1, resolution_m)
+def grid_coordinates(
+    center_x_m,
+    center_y_m,
+    forward_m,
+    rear_m,
+    half_width_m,
+    resolution_m,
+    *,
+    align_to_resolution=False,
+):
+    """Return map-frame grid axes centered laterally on the robot.
+
+    A continuously translated grid makes the same fixed-frame point fall into
+    different elevation cells whenever odometry jitters by a few millimetres.
+    ``align_to_resolution`` anchors the rolling window to the fixed map lattice
+    instead: its bounds move only after the robot crosses one grid resolution.
+    """
+    lower_x, upper_x = center_x_m - rear_m, center_x_m + forward_m
+    lower_y, upper_y = center_y_m - half_width_m, center_y_m + half_width_m
+    if align_to_resolution:
+        lower_x = np.floor(lower_x / resolution_m) * resolution_m
+        upper_x = np.ceil(upper_x / resolution_m) * resolution_m
+        lower_y = np.floor(lower_y / resolution_m) * resolution_m
+        upper_y = np.ceil(upper_y / resolution_m) * resolution_m
+    xs = np.arange(lower_x, upper_x + resolution_m * 0.1, resolution_m)
+    ys = np.arange(lower_y, upper_y + resolution_m * 0.1, resolution_m)
     return xs, ys
 
 
@@ -105,3 +127,114 @@ def elevation_from_points(
             elevation[row, column] = np.percentile(z[start:end], percentile)
             valid[row, column] = True
     return elevation, valid, counts
+
+
+def update_temporal_cell_memory(
+    memory,
+    xs,
+    ys,
+    elevation,
+    valid,
+    *,
+    resolution_m,
+    observed_ns,
+    maximum_height_deviation_m,
+    replacement_observations,
+):
+    """Update bounded per-cell terrain memory from measured elevation cells.
+
+    ``memory`` is deliberately a plain dictionary so the ROS node owns its
+    lifetime.  A one-off conflicting height cannot overwrite a previously
+    measured surface; it needs repeated, mutually consistent observations.
+    """
+    if replacement_observations < 1:
+        raise ValueError("replacement_observations must be positive")
+    for row, column in zip(*np.nonzero(valid)):
+        # Keep the grid-coordinate origin in the key.  Integer rounding of a
+        # half-cell offset would collapse adjacent nodes (for example -0.05 m
+        # and +0.05 m at a 0.10 m resolution) into the same cache entry.
+        key = (round(float(xs[column]), 6), round(float(ys[row]), 6))
+        height = float(elevation[row, column])
+        entry = memory.get(key)
+        if entry is None:
+            memory[key] = {
+                "height_m": height,
+                "observed_ns": int(observed_ns),
+                "candidate_height_m": None,
+                "candidate_count": 0,
+            }
+            continue
+        if abs(height - entry["height_m"]) <= maximum_height_deviation_m:
+            entry["height_m"] = height
+            entry["observed_ns"] = int(observed_ns)
+            entry["candidate_height_m"] = None
+            entry["candidate_count"] = 0
+            continue
+        candidate = entry["candidate_height_m"]
+        if candidate is not None and abs(height - candidate) <= maximum_height_deviation_m:
+            entry["candidate_height_m"] = height
+            entry["candidate_count"] += 1
+        else:
+            entry["candidate_height_m"] = height
+            entry["candidate_count"] = 1
+        if entry["candidate_count"] >= replacement_observations:
+            entry["height_m"] = entry["candidate_height_m"]
+            entry["observed_ns"] = int(observed_ns)
+            entry["candidate_height_m"] = None
+            entry["candidate_count"] = 0
+    return memory
+
+
+def fill_from_temporal_cell_memory(
+    memory,
+    xs,
+    ys,
+    elevation,
+    valid,
+    *,
+    resolution_m,
+    now_ns,
+    hold_ns,
+    maximum_age_ns,
+):
+    """Fill only unknown cells from recently measured, non-stale memory."""
+    elevation = np.asarray(elevation, dtype=np.float32).copy()
+    valid = np.asarray(valid, dtype=bool).copy()
+    stale = [key for key, entry in memory.items() if now_ns - entry["observed_ns"] > maximum_age_ns]
+    for key in stale:
+        del memory[key]
+    filled = 0
+    for row, column in zip(*np.nonzero(~valid)):
+        key = (round(float(xs[column]), 6), round(float(ys[row]), 6))
+        entry = memory.get(key)
+        if entry is None or now_ns - entry["observed_ns"] > hold_ns:
+            continue
+        elevation[row, column] = entry["height_m"]
+        valid[row, column] = True
+        filled += 1
+    return elevation, valid, filled
+
+
+def prune_cell_memory_to_bounds(
+    memory,
+    *,
+    minimum_x_m,
+    maximum_x_m,
+    minimum_y_m,
+    maximum_y_m,
+):
+    """Discard cached elevation cells outside the current local-map bounds.
+
+    The cache stores map-frame terrain cells rather than raw point clouds.  A
+    spatial bound is therefore as important as its time bound: it prevents a
+    long traversal from gradually turning the local estimator into a global
+    map and keeps each publish operation proportional to the planning window.
+    """
+    outside = [
+        key for key in memory
+        if (key[0] < minimum_x_m or key[0] > maximum_x_m or
+            key[1] < minimum_y_m or key[1] > maximum_y_m)
+    ]
+    for key in outside:
+        del memory[key]
+    return memory

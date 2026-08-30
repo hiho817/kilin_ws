@@ -52,7 +52,7 @@ def test_initial_flat_support_is_seeded_from_verified_front_strip_only():
     output, output_valid, filled = seed_initial_flat_support(
         coordinates, coordinates, heights, valid,
         origin_x_m=0.0, origin_y_m=0.0, yaw_rad=0.0,
-        flat_height_m=flat_height, rear_m=0.65, forward_m=0.75, half_width_m=0.5,
+        flat_height_m=flat_height, rear_m=0.65, forward_m=0.85, half_width_m=0.5,
     )
 
     assert flat_height == -0.28
@@ -60,3 +60,30 @@ def test_initial_flat_support_is_seeded_from_verified_front_strip_only():
     assert output_valid[10, 4]  # x=-0.6, y=0: required rear support area
     assert output[10, 4] == -0.28
     assert not output_valid[0, 10]  # lateral outside the support envelope
+
+
+def test_initial_flat_support_tolerates_one_outlier_but_requires_a_dominant_cluster():
+    coordinates = np.arange(0.0, 1.01, 0.1)
+    heights = np.full((coordinates.size, coordinates.size), np.nan)
+    valid = np.zeros_like(heights, dtype=bool)
+    selected = (coordinates[None, :] >= 0.2) & (coordinates[None, :] <= 0.8)
+    selected = np.broadcast_to(selected, heights.shape).copy()
+    heights[selected], valid[selected] = -0.28, True
+    heights[0, 2] = -0.36
+    flat = infer_flat_height_ahead(
+        coordinates, coordinates, heights, valid,
+        origin_x_m=0.0, origin_y_m=0.0, yaw_rad=0.0,
+        minimum_forward_m=0.2, maximum_forward_m=0.8,
+        half_width_m=1.0, maximum_height_span_m=0.05,
+        minimum_inlier_fraction=0.80,
+    )
+    assert flat == -0.28
+
+    heights[:, 2:5] = -0.36
+    assert infer_flat_height_ahead(
+        coordinates, coordinates, heights, valid,
+        origin_x_m=0.0, origin_y_m=0.0, yaw_rad=0.0,
+        minimum_forward_m=0.2, maximum_forward_m=0.8,
+        half_width_m=1.0, maximum_height_span_m=0.05,
+        minimum_inlier_fraction=0.80,
+    ) is None

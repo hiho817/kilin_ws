@@ -1,0 +1,42 @@
+# Conservative default; copy to a dated run folder before any armed trial.
+kilin_hip_characterization:
+  ros__parameters:
+    armed: false
+    command_topic: /kilin/hip_characterization/command_preview
+    state_topic: /motor/state
+    run_dir: ""
+    strategy_name: phase_a_two_state_baseline
+    strategy_version: 1.0.0
+    repetitions: 3
+    active_modules: [A, B]
+    motion_mode: two_state_cycle
+    state_a_deg: 0.0
+    state_b_deg: 3.0
+    startup_state_tolerance_deg: 3.0
+    hip_speed_rad_s: 0.1
+    start_zero_hold_s: 2.0
+    static_release_ramp_s: 1.0
+    static_release_fraction: 0.15
+    segment_hold_s: 1.0
+    final_zero_hold_s: 3.0
+    fallback_segment_s: 2.0
+    kp: 360.0
+    ki: 0.0
+    kd: 5.0
+    hip_ff_outward_direct: 0.0
+    hip_ff_inward_direct: 0.0
+    hip_ff_static_outward_direct: 0.0
+    hip_ff_static_inward_direct: 0.0
+    max_abs_hip_ff_torque_nm: 200.0
+    ff_motion_min_rate_rad_s: 0.03
+    ff_error_enable_rad: 0.010
+    ff_error_disable_rad: 0.004
+    wheel_mode: rest
+    wheel_torque_outward_nm: 0.0
+    wheel_torque_inward_nm: 0.0
+    hip_to_wheel_m: 0.260
+    wheel_radius_m: 0.051
+    max_abs_hip_error_rad: 0.35
+    max_abs_hip_torque_nm: 400.0
+    max_abs_hub_torque_nm: 20.0
+    max_state_age_s: 0.10

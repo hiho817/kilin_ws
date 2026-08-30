@@ -1,0 +1,49 @@
+# Reviewed single source of truth for Phase-A generated cells.
+campaign:
+  defaults:
+    armed: false
+    command_topic: /kilin/hip_characterization/command_preview
+    state_topic: /motor/state
+    run_dir: ""
+    strategy_name: phase_a_two_state_baseline
+    strategy_version: 1.0.0
+    repetitions: 3
+    motion_mode: two_state_cycle
+    state_a_deg: 0.0
+    state_b_deg: 45.0
+    startup_state_tolerance_deg: 3.0
+    start_zero_hold_s: 2.0
+    static_release_ramp_s: 1.0
+    static_release_fraction: 0.15
+    segment_hold_s: 1.0
+    final_zero_hold_s: 3.0
+    fallback_segment_s: 2.0
+    hip_ff_static_outward_direct: 0.0
+    hip_ff_static_inward_direct: 0.0
+    max_abs_hip_ff_torque_nm: 200.0
+    ff_motion_min_rate_rad_s: 0.03
+    ff_error_enable_rad: 0.010
+    ff_error_disable_rad: 0.004
+    wheel_torque_outward_nm: 0.0
+    wheel_torque_inward_nm: 0.0
+    hip_to_wheel_m: 0.260
+    wheel_radius_m: 0.051
+    max_abs_hip_error_rad: 0.35
+    max_abs_hip_torque_nm: 400.0
+    max_abs_hub_torque_nm: 20.0
+    max_state_age_s: 0.10
+  stages:
+    test02_rest_speed:
+      matrix: {groups: [front, rear, left, right], hip_speed_rad_s: [0.1, 0.2, 0.4, 0.6, 0.8, 1.0], pid_candidates: [[360, 0, 5]], hip_ff_direct: [0], wheel_modes: [rest]}
+    test03_pid:
+      matrix: {groups: [front, rear, left, right], hip_speed_rad_s: [0.1, 0.2, 0.4, 0.6, 0.8, 1.0], pid_candidates: [[360, 0, 5], [500, 0, 5], [360, 0, 10], [360, 0.1, 5], [360, 0.2, 5]], hip_ff_direct: [0], wheel_modes: [rest]}
+    test04_feedforward:
+      matrix: {groups: [front, rear, left, right], hip_speed_rad_s: [0.1, 0.2, 0.4, 0.6, 0.8, 1.0], pid_candidates: [[360, 0, 5]], hip_ff_direct: [0, 20, 40, 60, 80, 100], wheel_modes: [rest]}
+    test05_wheel:
+      matrix: {groups: [front, rear, left, right], hip_speed_rad_s: [0.1, 0.2, 0.4, 0.6, 0.8, 1.0], pid_candidates: [[360, 0, 5]], hip_ff_direct: [0], wheel_modes: [rest, brake, speed, position_hold]}
+    test05_torque_10:
+      overrides: {wheel_torque_outward_nm: 10.0, wheel_torque_inward_nm: 10.0}
+      matrix: {groups: [front, rear, left, right], hip_speed_rad_s: [0.1, 0.2, 0.4, 0.6, 0.8, 1.0], pid_candidates: [[360, 0, 5]], hip_ff_direct: [0], wheel_modes: [torque]}
+    test05_torque_20:
+      overrides: {wheel_torque_outward_nm: 20.0, wheel_torque_inward_nm: 20.0}
+      matrix: {groups: [front, rear, left, right], hip_speed_rad_s: [0.1, 0.2, 0.4, 0.6, 0.8, 1.0], pid_candidates: [[360, 0, 5]], hip_ff_direct: [0], wheel_modes: [torque]}

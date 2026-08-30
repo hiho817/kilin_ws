@@ -18,11 +18,12 @@ kilin_known_terrain_controller:
     # strip immediately ahead.  It is not a fallback for later unknown terrain.
     live_terrain.initial_flat_support.enabled: true
     live_terrain.initial_flat_support.rear_m: 0.65
-    live_terrain.initial_flat_support.forward_m: 0.75
+    live_terrain.initial_flat_support.forward_m: 0.85
     live_terrain.initial_flat_support.half_width_m: 0.50
     live_terrain.initial_flat_support.measurement_min_forward_m: 0.20
     live_terrain.initial_flat_support.measurement_max_forward_m: 0.80
     live_terrain.initial_flat_support.maximum_height_span_m: 0.05
+    live_terrain.initial_flat_support.minimum_inlier_fraction: 0.80
     # Repair only a single node with four agreeing cardinal neighbours.
     live_terrain.isolated_hole_fill.enabled: true
     live_terrain.isolated_hole_fill.maximum_height_span_m: 0.08

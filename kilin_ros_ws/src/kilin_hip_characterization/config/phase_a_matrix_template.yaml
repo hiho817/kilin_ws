@@ -1,0 +1,23 @@
+# This is a planning/template file, not an armed controller profile.
+# Select reviewed values before generation; do not use these comments as limits.
+phase_a:
+  groups: [front, rear, left, right]
+  repetitions_per_cell: 3
+  wheel_modes: [rest, brake, speed, torque, position_hold]
+  hip_speed_rad_s: [0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
+  pid_candidates:
+    - [360, 0, 5]
+    - [500, 0, 5]
+    - [360, 0, 10]
+    - [360, 0.1, 5]
+    - [360, 0.2, 5]
+  hip_feedforward_direct_command: [0, 20, 40, 60, 80, 100]
+  hip_feedforward_limit: 200
+  feedforward_schema: [hip_ff_outward_direct, hip_ff_inward_direct, hip_ff_static_outward_direct, hip_ff_static_inward_direct]
+  motion_modes: [two_state_cycle, outward_sequence]
+  sequence_examples: [[0, 45, 0], [0, 10, 20, 30, 20, 30, 0]]
+  wheel_torque_magnitude: [0, 10, 20]
+
+# Use a staged campaign, not every possible combination in one session:
+# 1. direction/preflight, 2. rest baseline at one PID/FF, 3. speed screening,
+# 4. wheel-mode screening, then 5. local PID/FF screening.
