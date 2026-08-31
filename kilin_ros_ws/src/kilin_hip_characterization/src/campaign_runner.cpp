@@ -49,7 +49,7 @@ class CampaignRunner final : public rclcpp::Node {
     state_topic_ = declare_parameter<std::string>("state_topic", "/motor/state");
     run_dir_ = declare_parameter<std::string>("run_dir", "");
     strategy_name_ = declare_parameter<std::string>("strategy_name", "phase_a_two_state_baseline");
-    strategy_version_ = declare_parameter<std::string>("strategy_version", "1.2.0");
+    strategy_version_ = declare_parameter<std::string>("strategy_version", "1.2.1");
     active_modules_ = declare_parameter<std::vector<std::string>>("active_modules", {"A", "B"});
     repetitions_ = declare_parameter<int>("repetitions", 3);
     state_a_deg_ = declare_parameter<double>("state_a_deg", 0.0);
@@ -90,8 +90,8 @@ class CampaignRunner final : public rclcpp::Node {
     const bool known_wheel_mode = wheel_mode_ == "rest" || wheel_mode_ == "speed_ik" || wheel_mode_ == "torque_assist";
     if (repetitions_ < 1 || startup_speed_ <= 0.0 || recovery_speed_ <= 0.0 || hip_speed_ <= 0.0 ||
         (!static_release_disabled && !static_release_enabled) || !known_wheel_mode ||
-        wheel_torque_outward_ < 0.0 || wheel_torque_inward_ < 0.0 || max_wheel_torque_ < 0.0 ||
-        hip_to_wheel_m_ <= 0.0 || wheel_radius_m_ <= 0.0 || wheel_rate_deadband_rad_s_ < 0.0) {
+        max_wheel_torque_ < 0.0 || hip_to_wheel_m_ <= 0.0 || wheel_radius_m_ <= 0.0 ||
+        wheel_rate_deadband_rad_s_ < 0.0) {
       throw std::runtime_error("invalid trajectory, wheel-mode, or wheel-assist setting");
     }
     for (const auto &name : active_modules_) {
@@ -205,9 +205,13 @@ class CampaignRunner final : public rclcpp::Node {
     }
 
     const bool outward = hip_rate_rad_s * sign(i) > 0.0;
-    const double magnitude = outward ? wheel_torque_outward_ : wheel_torque_inward_;
+    const double configured_torque = outward ? wheel_torque_outward_ : wheel_torque_inward_;
     leg.hub.motor_mode = kTorque;
-    leg.hub.torque = std::copysign(std::min(magnitude, max_wheel_torque_), wheel_rate);
+    // A positive configured value assists the calculated IK wheel direction;
+    // a negative value deliberately opposes it.  The clamp preserves that
+    // signed policy instead of silently turning a negative value positive.
+    leg.hub.torque = std::clamp(std::copysign(1.0, wheel_rate) * configured_torque,
+                                -max_wheel_torque_, max_wheel_torque_);
     commanded_hub_torque_[i] = leg.hub.torque;
     commanded_hub_mode_[i] = kTorque;
   }

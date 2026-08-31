@@ -7,7 +7,7 @@ kilin_hip_characterization:
     state_topic: /motor/state
     run_dir: ""
     strategy_name: phase_a_two_state_baseline
-    strategy_version: 1.2.0
+    strategy_version: 1.2.1
     repetitions: 3
     active_modules: [A, B]
     motion_mode: two_state_cycle
