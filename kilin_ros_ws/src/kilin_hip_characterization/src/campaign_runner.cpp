@@ -15,8 +15,9 @@
 #include "kilin_msgs/msg/motor_state_stamped.hpp"
 
 namespace fs = std::filesystem;
-constexpr int kRest = 0, kPosition = 4, kBrake = 7;
+constexpr int kRest = 0, kPosition = 4, kVelocity = 5, kTorque = 6, kBrake = 7;
 constexpr double kDegToRad = M_PI / 180.0;
+constexpr double kRadSToRpm10 = 60.0 * 10.0 / (2.0 * M_PI);
 constexpr std::array<const char *, 4> kModuleNames{"A", "B", "C", "D"};
 
 enum class Phase { kWaitForState, kStartupMove, kStartHold, kStaticRelease, kMoveToB,
@@ -48,7 +49,7 @@ class CampaignRunner final : public rclcpp::Node {
     state_topic_ = declare_parameter<std::string>("state_topic", "/motor/state");
     run_dir_ = declare_parameter<std::string>("run_dir", "");
     strategy_name_ = declare_parameter<std::string>("strategy_name", "phase_a_two_state_baseline");
-    strategy_version_ = declare_parameter<std::string>("strategy_version", "1.1.0");
+    strategy_version_ = declare_parameter<std::string>("strategy_version", "1.2.0");
     active_modules_ = declare_parameter<std::vector<std::string>>("active_modules", {"A", "B"});
     repetitions_ = declare_parameter<int>("repetitions", 3);
     state_a_deg_ = declare_parameter<double>("state_a_deg", 0.0);
@@ -73,18 +74,33 @@ class CampaignRunner final : public rclcpp::Node {
     max_state_age_s_ = declare_parameter<double>("max_state_age_s", 0.10);
     max_error_rad_ = declare_parameter<double>("max_abs_hip_error_rad", 0.35);
     max_torque_ = declare_parameter<double>("max_abs_hip_torque_nm", 400.0);
+    wheel_mode_ = declare_parameter<std::string>("wheel_mode", "rest");
+    wheel_torque_outward_ = declare_parameter<double>("wheel_torque_outward_nm", 0.0);
+    wheel_torque_inward_ = declare_parameter<double>("wheel_torque_inward_nm", 0.0);
+    max_wheel_torque_ = declare_parameter<double>("max_abs_hub_torque_nm", 20.0);
+    hip_to_wheel_m_ = declare_parameter<double>("hip_to_wheel_m", 0.260);
+    wheel_radius_m_ = declare_parameter<double>("wheel_radius_m", 0.051);
+    wheel_rate_deadband_rad_s_ = declare_parameter<double>("wheel_rate_deadband_rad_s", 0.02);
 
     if (armed_ && run_dir_.empty()) throw std::runtime_error("armed run requires run_dir");
     const bool static_release_disabled = static_release_s_ == 0.0 && static_release_fraction_ == 0.0;
     const bool static_release_enabled = static_release_s_ > 0.0 && static_release_fraction_ > 0.0 && static_release_fraction_ < 1.0;
-    if (repetitions_ < 1 || startup_speed_ <= 0.0 || recovery_speed_ <= 0.0 || hip_speed_ <= 0.0 || (!static_release_disabled && !static_release_enabled)) throw std::runtime_error("invalid repetitions, speed, or static-release settings");
+    if (wheel_mode_ == "speed") wheel_mode_ = "speed_ik";
+    if (wheel_mode_ == "torque") wheel_mode_ = "torque_assist";
+    const bool known_wheel_mode = wheel_mode_ == "rest" || wheel_mode_ == "speed_ik" || wheel_mode_ == "torque_assist";
+    if (repetitions_ < 1 || startup_speed_ <= 0.0 || recovery_speed_ <= 0.0 || hip_speed_ <= 0.0 ||
+        (!static_release_disabled && !static_release_enabled) || !known_wheel_mode ||
+        wheel_torque_outward_ < 0.0 || wheel_torque_inward_ < 0.0 || max_wheel_torque_ < 0.0 ||
+        hip_to_wheel_m_ <= 0.0 || wheel_radius_m_ <= 0.0 || wheel_rate_deadband_rad_s_ < 0.0) {
+      throw std::runtime_error("invalid trajectory, wheel-mode, or wheel-assist setting");
+    }
     for (const auto &name : active_modules_) {
       if (std::find(kModuleNames.begin(), kModuleNames.end(), name) == kModuleNames.end()) throw std::runtime_error("unknown active module");
     }
     publisher_ = create_publisher<kilin_msgs::msg::MotorCmdStamped>(command_topic_, 10);
     subscriber_ = create_subscription<kilin_msgs::msg::MotorStateStamped>(state_topic_, rclcpp::QoS(20).best_effort(), std::bind(&CampaignRunner::onState, this, std::placeholders::_1));
     timer_ = create_wall_timer(std::chrono::milliseconds(10), std::bind(&CampaignRunner::tick, this));
-    RCLCPP_INFO(get_logger(), "Runner ready: strategy=%s v%s armed=%s command_topic=%s", strategy_name_.c_str(), strategy_version_.c_str(), armed_ ? "true" : "false", command_topic_.c_str());
+    RCLCPP_INFO(get_logger(), "Runner ready: strategy=%s v%s armed=%s command_topic=%s wheel_mode=%s", strategy_name_.c_str(), strategy_version_.c_str(), armed_ ? "true" : "false", command_topic_.c_str(), wheel_mode_.c_str());
   }
 
  private:
@@ -113,7 +129,9 @@ class CampaignRunner final : public rclcpp::Node {
       if (!std::isfinite(actual(i))) throw std::runtime_error("non-finite hip feedback");
       move_start_[i] = hips_[i].motor;
       commanded_[i] = hips_[i].motor;
+      previous_target_[i] = hips_[i].motor;
     }
+    previous_target_time_ = now();
     openEvidence();
     setPhase(Phase::kStartupMove, "moving to configured state A with wheels rest and zero FF");
   }
@@ -161,11 +179,47 @@ class CampaignRunner final : public rclcpp::Node {
     return "";
   }
 
+  bool wheelMotionPhase() const {
+    return phase_ == Phase::kStaticRelease || phase_ == Phase::kMoveToB || phase_ == Phase::kMoveToA;
+  }
+
+  double wheelRateRadS(double hip_rate_rad_s, double commanded_hip_rad) const {
+    return -hip_to_wheel_m_ * std::cos(commanded_hip_rad) * hip_rate_rad_s / wheel_radius_m_;
+  }
+
+  void commandHub(kilin_msgs::msg::LegCmd &leg, size_t i, double hip_rate_rad_s, double commanded_hip_rad) {
+    commanded_hub_velocity_rpm10_[i] = 0.0;
+    commanded_hub_torque_[i] = 0.0;
+    commanded_hub_mode_[i] = kRest;
+    leg.hub.motor_mode = kRest;
+    if (!active(i) || !wheelMotionPhase() || std::abs(hip_rate_rad_s) < 1e-6 || wheel_mode_ == "rest") return;
+
+    const double wheel_rate = wheelRateRadS(hip_rate_rad_s, commanded_hip_rad);
+    if (std::abs(wheel_rate) < wheel_rate_deadband_rad_s_) return;
+    if (wheel_mode_ == "speed_ik") {
+      leg.hub.motor_mode = kVelocity;
+      leg.hub.velocity = wheel_rate * kRadSToRpm10;
+      commanded_hub_velocity_rpm10_[i] = leg.hub.velocity;
+      commanded_hub_mode_[i] = kVelocity;
+      return;
+    }
+
+    const bool outward = hip_rate_rad_s * sign(i) > 0.0;
+    const double magnitude = outward ? wheel_torque_outward_ : wheel_torque_inward_;
+    leg.hub.motor_mode = kTorque;
+    leg.hub.torque = std::copysign(std::min(magnitude, max_wheel_torque_), wheel_rate);
+    commanded_hub_torque_[i] = leg.hub.torque;
+    commanded_hub_mode_[i] = kTorque;
+  }
+
   void commandPosition(const std::array<double, 4> &target, bool allow_ff) {
     kilin_msgs::msg::MotorCmdStamped message;
     stamp(message);
     std::array<kilin_msgs::msg::LegCmd, 4> legs;
+    const auto command_time = now();
+    const double dt_s = std::max(1e-3, (command_time - previous_target_time_).seconds());
     for (size_t i = 0; i < 4; ++i) {
+      const double hip_rate = (target[i] - previous_target_[i]) / dt_s;
       commanded_[i] = target[i];
       legs[i].hip.motor_mode = kPosition;
       // Do not compensate the motor command with position_diff.  It is kept in
@@ -176,8 +230,10 @@ class CampaignRunner final : public rclcpp::Node {
       legs[i].hip.torque = allow_ff ? feedforward(i, target[i] - hips_[i].motor) : 0.0;
       legs[i].steering.motor_mode = kPosition;
       legs[i].steering.position = 0.0;
-      legs[i].hub.motor_mode = kRest;
+      commandHub(legs[i], i, hip_rate, target[i]);
+      previous_target_[i] = target[i];
     }
+    previous_target_time_ = command_time;
     message.module_a = legs[0]; message.module_b = legs[1]; message.module_c = legs[2]; message.module_d = legs[3];
     publisher_->publish(message);
     writeTrace();
@@ -264,14 +320,15 @@ class CampaignRunner final : public rclcpp::Node {
   }
   void complete() { publishRest(); setPhase(Phase::kComplete, "all repetitions and recovery complete"); RCLCPP_INFO(get_logger(), "Campaign complete."); rclcpp::shutdown(); }
   void stamp(kilin_msgs::msg::MotorCmdStamped &message) { const auto t = now(); message.header.seq = sequence_++; message.header.time.sec = static_cast<int32_t>(t.seconds()); message.header.time.nanosec = static_cast<uint32_t>(t.nanoseconds() % 1000000000LL); message.header.frame_id = "kilin_hip_characterization"; }
-  void publishRest() { kilin_msgs::msg::MotorCmdStamped message; stamp(message); kilin_msgs::msg::LegCmd leg; leg.hip.motor_mode=kRest; leg.steering.motor_mode=kRest; leg.hub.motor_mode=kBrake; message.module_a=leg;message.module_b=leg;message.module_c=leg;message.module_d=leg;publisher_->publish(message); }
-  void openEvidence() { if (run_dir_.empty()) return; fs::create_directories(run_dir_); trace_.open(fs::path(run_dir_) / "command_state_trace.csv"); trace_ << "time_s,phase,trial,module,commanded_motor_rad,motor_position_rad,position_diff_rad,actual_hip_angle_rad,hip_torque,error_code\n"; std::ofstream manifest(fs::path(run_dir_) / "trial_manifest.yaml"); manifest << "strategy_name: " << strategy_name_ << "\nstrategy_version: " << strategy_version_ << "\nangle_convention: actual_hip_angle_rad = motor_position + position_diff\ncontrol_angle_reference: motor_position (position_diff is measurement-only)\n"; }
-  void writeTrace() { if (!trace_) return; for (size_t i=0;i<4;++i) trace_ << now().seconds() << ',' << phaseName(phase_) << ',' << completed_repetitions_ + 1 << ',' << kModuleNames[i] << ',' << commanded_[i] << ',' << hips_[i].motor << ',' << hips_[i].diff << ',' << actual(i) << ',' << hips_[i].torque << ',' << hips_[i].error << '\n'; }
+  void publishRest() { kilin_msgs::msg::MotorCmdStamped message; stamp(message); kilin_msgs::msg::LegCmd leg; leg.hip.motor_mode=kRest; leg.steering.motor_mode=kRest; leg.hub.motor_mode=kRest; message.module_a=leg;message.module_b=leg;message.module_c=leg;message.module_d=leg;publisher_->publish(message); }
+  void openEvidence() { if (run_dir_.empty()) return; fs::create_directories(run_dir_); trace_.open(fs::path(run_dir_) / "command_state_trace.csv"); trace_ << "time_s,phase,trial,module,commanded_motor_rad,motor_position_rad,position_diff_rad,actual_hip_angle_rad,hip_torque,hub_mode,commanded_hub_velocity_rpm10,commanded_hub_torque,error_code\n"; std::ofstream manifest(fs::path(run_dir_) / "trial_manifest.yaml"); manifest << "strategy_name: " << strategy_name_ << "\nstrategy_version: " << strategy_version_ << "\nangle_convention: actual_hip_angle_rad = motor_position + position_diff\ncontrol_angle_reference: motor_position (position_diff is measurement-only)\nwheel_mode: " << wheel_mode_ << "\nwheel_torque_outward_nm: " << wheel_torque_outward_ << "\nwheel_torque_inward_nm: " << wheel_torque_inward_ << "\nmax_abs_hub_torque_nm: " << max_wheel_torque_ << "\n"; }
+  void writeTrace() { if (!trace_) return; for (size_t i=0;i<4;++i) trace_ << now().seconds() << ',' << phaseName(phase_) << ',' << completed_repetitions_ + 1 << ',' << kModuleNames[i] << ',' << commanded_[i] << ',' << hips_[i].motor << ',' << hips_[i].diff << ',' << actual(i) << ',' << hips_[i].torque << ',' << commanded_hub_mode_[i] << ',' << commanded_hub_velocity_rpm10_[i] << ',' << commanded_hub_torque_[i] << ',' << hips_[i].error << '\n'; }
 
   bool armed_{false}, have_state_{false}; int repetitions_{3}, completed_repetitions_{0}; uint32_t sequence_{0};
   std::string command_topic_, state_topic_, run_dir_, strategy_name_, strategy_version_; std::vector<std::string> active_modules_;
-  double state_a_deg_{0}, state_b_deg_{45}, startup_speed_{.1}, recovery_deg_{0}, recovery_speed_{.1}, recovery_rest_s_{1}, hip_speed_{.2}, kp_{360}, ki_{0}, kd_{5}, ff_outward_{0}, ff_inward_{0}, ff_static_outward_{0}, ff_static_inward_{0}, max_ff_{200}, start_hold_s_{2}, static_release_s_{1}, static_release_fraction_{.15}, segment_hold_s_{1}, max_state_age_s_{.1}, max_error_rad_{.35}, max_torque_{400};
-  std::array<HipState, 4> hips_{}; std::array<double, 4> commanded_{}, move_start_{}; Phase phase_{Phase::kWaitForState}; rclcpp::Time phase_start_{0,0,RCL_ROS_TIME}, last_state_{0,0,RCL_ROS_TIME}; std::ofstream trace_;
+  double state_a_deg_{0}, state_b_deg_{45}, startup_speed_{.1}, recovery_deg_{0}, recovery_speed_{.1}, recovery_rest_s_{1}, hip_speed_{.2}, kp_{360}, ki_{0}, kd_{5}, ff_outward_{0}, ff_inward_{0}, ff_static_outward_{0}, ff_static_inward_{0}, max_ff_{200}, start_hold_s_{2}, static_release_s_{1}, static_release_fraction_{.15}, segment_hold_s_{1}, max_state_age_s_{.1}, max_error_rad_{.35}, max_torque_{400}, wheel_torque_outward_{0}, wheel_torque_inward_{0}, max_wheel_torque_{20}, hip_to_wheel_m_{.260}, wheel_radius_m_{.051}, wheel_rate_deadband_rad_s_{.02};
+  std::string wheel_mode_;
+  std::array<HipState, 4> hips_{}; std::array<double, 4> commanded_{}, move_start_{}, previous_target_{}, commanded_hub_velocity_rpm10_{}, commanded_hub_torque_{}; std::array<int, 4> commanded_hub_mode_{}; Phase phase_{Phase::kWaitForState}; rclcpp::Time phase_start_{0,0,RCL_ROS_TIME}, last_state_{0,0,RCL_ROS_TIME}, previous_target_time_{0,0,RCL_ROS_TIME}; std::ofstream trace_;
   rclcpp::Publisher<kilin_msgs::msg::MotorCmdStamped>::SharedPtr publisher_; rclcpp::Subscription<kilin_msgs::msg::MotorStateStamped>::SharedPtr subscriber_; rclcpp::TimerBase::SharedPtr timer_;
 };
 int main(int argc, char **argv) { rclcpp::init(argc, argv); rclcpp::spin(std::make_shared<CampaignRunner>()); rclcpp::shutdown(); return 0; }

@@ -7,7 +7,7 @@ kilin_hip_characterization:
     state_topic: /motor/state
     run_dir: ""
     strategy_name: phase_a_two_state_baseline
-    strategy_version: 1.1.0
+    strategy_version: 1.2.0
     repetitions: 3
     active_modules: [A, B]
     motion_mode: two_state_cycle
@@ -32,6 +32,15 @@ kilin_hip_characterization:
     ff_motion_min_rate_rad_s: 0.03
     ff_error_enable_rad: 0.010
     ff_error_disable_rad: 0.004
+    # Hub stays rest in this conservative default.  Use speed_ik or
+    # torque_assist only in a new wheel-mode strategy/profile.
+    wheel_mode: rest
+    wheel_torque_outward_nm: 0.0
+    wheel_torque_inward_nm: 0.0
+    max_abs_hub_torque_nm: 20.0
+    hip_to_wheel_m: 0.260
+    wheel_radius_m: 0.051
+    wheel_rate_deadband_rad_s: 0.02
     max_abs_hip_error_rad: 0.35
     max_abs_hip_torque_nm: 400.0
     max_state_age_s: 0.10

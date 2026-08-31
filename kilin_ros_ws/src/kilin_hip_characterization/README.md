@@ -8,7 +8,7 @@ One ROS 2 package for low-level hip-transmission characterization, PID and bound
 - Real actuation requires both `armed:=true` and an explicit real command topic.
 - It sends nothing until `/motor/state` is fresh, then captures current hip and hub feedback as its starting state.
 - New-recording convention is `actual_hip_angle_rad = motor_position + position_diff`.
-- Strategy **1.1.0** commands the raw motor-position reference directly. `position_diff` is not fed back into the position or FF loop.
+- Strategy **1.2.0** commands the raw motor-position reference directly. `position_diff` is not fed back into the position or FF loop.
 - `actual_hip_angle_rad` is still reconstructed and recorded for offline transmission/force analysis. Safety aborts on stale state, non-finite state, motor error code, configured hip-torque bound, or configured raw-motor tracking bound. Abort sends hip rest and hub brake.
 
 The package does not modify `kilin_com_estimator`, the terrain planner, or FAST-LIO2.
@@ -33,24 +33,19 @@ only after each unit is executed, as experiment evidence.
 Every YAML carries `strategy_name` and numeric `strategy_version`; changing a
 control policy requires a new name/version before an experiment is run.
 
-### Wheel-mode status and intended interface
+### Wheel modes
 
-**Strategy 1.1.0 supports `rest` only.** The executable writes hub `rest` on
-every startup, test, hold, recovery, and abort command. It therefore cannot be
-used to test wheel velocity or wheel torque yet. A YAML `wheel_mode`,
-`wheel_torque_*`, or wheel-geometry field is silently ignored by this revision;
-do not use such a profile as evidence for a wheel-assisted experiment.
-
-The next wheel-enabled strategy will add one explicit `wheel_mode` and will
-record its wheel policy in the manifest. Its modes will mean:
+Strategy **1.2.0** has one explicit `wheel_mode`, recorded in the run manifest
+and trace. Hubs are always `rest` during startup, both hold phases, recovery,
+completion, and abort. Wheel commands are active only during static release,
+the dynamic A→B move, and the B→A return.
 
 | Future mode | Hub command during hip test | Intended use and safety rule |
 | --- | --- | --- |
-| `rest` | Hub motor mode `rest`; no active velocity or torque command. | Baseline hip-only test. This remains mandatory for startup, recovery, and abort. |
-| `brake` | Hub motor mode `brake`; no velocity or torque setpoint. | Constrain wheel rotation while measuring the transmission. It is not an active wheel-position controller. |
-| `speed_ik` | Hub velocity is calculated live from the commanded hip trajectory at every control tick. | The wheel follows hip motion kinematically; it is never a fixed speed. The command field uses the established RPM-times-ten unit: `hub.velocity = wheel_rate_rad_s × 60 × 10 / (2π)`. |
-| `torque_assist` | Hub torque magnitude is a fixed configuration value. Only its sign is selected from the live IK wheel-rate direction. | Assist the same direction as `speed_ik` while the hip extends/contracts. The torque is **not** calculated from IK. Outward and inward fixed magnitudes may differ and require a dedicated lower hub-torque clamp. |
-| `position_hold` | Hub position is initialized from its measured position before enabling position mode. | Only for a later dedicated test. Starting position mode with a zero command when the wheel is already rotated can cause a violent spin, so a fixed zero reference is prohibited. |
+| `rest` | Hub motor mode `rest`; no active velocity or torque command. | Baseline hip-only test. |
+| `speed_ik` (or alias `speed`) | Hub velocity is calculated live from the commanded hip trajectory at every control tick. | The wheel follows hip motion kinematically; it is never a fixed speed. The command field uses the established RPM-times-ten unit: `hub.velocity = wheel_rate_rad_s × 60 × 10 / (2π)`. |
+| `torque_assist` (or alias `torque`) | Hub torque magnitude is a fixed configuration value. Only its sign is selected from the live IK wheel-rate direction. | Assist the same direction as `speed_ik` while the hip extends/contracts. The torque is **not** calculated from IK. Outward and inward fixed magnitudes may differ and are clamped. |
+| `brake` / `position_hold` | Not implemented in 1.2.0. | A profile using either is rejected before commanding hardware. Position hold will require feedback-captured position before it is introduced. |
 
 For `speed_ik`, IK supplies both the live wheel-rate magnitude and direction.
 For `torque_assist`, IK supplies **only the direction**; the magnitude comes
@@ -60,9 +55,20 @@ rate. In the simple planar model this is
 `wheel_rate = -L × cos(commanded_hip_angle) × hip_rate / R`, where `L` is the
 hip-to-wheel distance and `R` is wheel radius. The torque sign must equal the
 sign of that computed wheel rate; it must not be a constant "forward" sign.
-Near zero wheel rate, the implementation will apply a deadband and send zero
-torque to prevent sign chatter. Wheel-speed and fixed-torque limits will be separately
-bounded and logged with the hip command before any armed wheel-mode campaign.
+Near zero wheel rate, `wheel_rate_deadband_rad_s` sends hub `rest` to prevent
+sign chatter. `max_abs_hub_torque_nm` clamps the fixed torque command. Every
+trace row records hub mode, commanded hub velocity (RPM×10), and commanded hub
+torque, so the bag and compact trace can be cross-checked after every run.
+
+| Parameter | Units / default | Exact effect |
+| --- | --- | --- |
+| `wheel_mode` | string / `rest` | `rest`, `speed_ik`/`speed`, or `torque_assist`/`torque`. Any other value rejects the run before commands are sent. |
+| `wheel_torque_outward_nm` | direct hub-torque command / `0` | Fixed non-negative magnitude for an outward/lowering hip movement. Used only by torque mode. |
+| `wheel_torque_inward_nm` | direct hub-torque command / `0` | Fixed non-negative magnitude for an inward/raising hip movement. Used only by torque mode. |
+| `max_abs_hub_torque_nm` | direct hub-torque clamp / `20` | Upper bound applied to either configured torque magnitude. |
+| `hip_to_wheel_m` | m / `0.260` | `L` in the live speed-IK relation. |
+| `wheel_radius_m` | m / `0.051` | `R` in the live speed-IK relation. |
+| `wheel_rate_deadband_rad_s` | rad/s / `0.02` | Below this computed wheel rate, the hub is set to rest. |
 
 ## Complete runner parameter reference
 
@@ -81,7 +87,7 @@ The master runner merges `kilin_hip_batch.defaults` with each test's
 | `run_dir` | string / empty | Evidence folder. Required for an armed direct controller invocation; the helpers set it automatically. |
 | `bag_topics` | string list / six base topics | Topics passed to `ros2 bag record` by `single_runner.py` or `batch_runner.py`. Place it in a direct profile's `ros__parameters`, or master `defaults`; a unit-test override may replace it. The helper removes it before passing the resolved profile to the C++ controller and saves the final list as `bag_topics.txt`. |
 | `strategy_name` | string | Human-readable control/analysis strategy name, recorded in the manifest. |
-| `strategy_version` | numeric string | Revision of that strategy, e.g. `1.1.0`, recorded in the manifest. Use `1.1.0` or a later new version for the raw-motor controller; do not reuse `1.0.0` compensated-run profiles. |
+| `strategy_version` | numeric string | Revision of that strategy, e.g. `1.2.0`, recorded in the manifest. Use `1.2.0` for this raw-motor, wheel-mode-capable controller; do not reuse `1.0.0` compensated-run profiles. |
 
 ### Test selection and geometry
 
@@ -161,7 +167,7 @@ undifferentiated score.
 | Parameter | Type / default | Exact effect |
 | --- | --- | --- |
 | `max_state_age_s` | seconds / `0.10` | Maximum acceptable age of `/motor/state`. A stale state rests all motors and aborts. |
-| `max_abs_hip_error_rad` | radians / `0.35` | Largest allowed measured-motor-minus-commanded-motor error. A breach aborts. It is deliberately not based on reconstructed actual hip angle in strategy 1.1.0. |
+| `max_abs_hip_error_rad` | radians / `0.35` | Largest allowed measured-motor-minus-commanded-motor error. A breach aborts. It is deliberately not based on reconstructed actual hip angle in strategy 1.2.0. |
 | `max_abs_hip_torque_nm` | feedback units / `400` | Largest allowed absolute hip torque feedback value. A breach aborts. Confirm feedback units on hardware before changing it. |
 
 The runner logs phase changes to the terminal and `launch.log`: startup move,
@@ -235,7 +241,7 @@ Dry run/default preview:
 ros2 launch kilin_hip_characterization characterization.launch.py
 ```
 
-For a real run, first copy and review a profile and create the run directory. Then explicitly provide `armed:=true`, `command_topic:=/motor/command`, and `run_dir:=...`. This package must be the only command authority for the test. In strategy 1.1.0, hubs remain in `rest`; the RPM-times-ten velocity conversion described above is a future `speed_ik` interface, not a currently published command.
+For a real run, first copy and review a profile and create the run directory. Then explicitly provide `armed:=true`, `command_topic:=/motor/command`, and `run_dir:=...`. This package must be the only command authority for the test. In strategy 1.2.0, `speed_ik` and `torque_assist` are published only during moving hip phases; hubs are rest otherwise.
 
 ## Offline analysis
 

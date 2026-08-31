@@ -23,15 +23,17 @@ There are independent direct motor-command terms: `hip_ff_outward_direct`, `hip_
 
 FF is disabled during zero/hold states, when desired velocity is too small, when the measured error is opposite to the planned move, and with enable/disable error hysteresis near target.  This avoids sign chatter and unstable assistance when commanded and actual positions are close.  `max_abs_hip_ff_torque_nm` remains a dedicated 200 command clamp.
 
-Strategy 1.1.0 keeps hubs in `rest` throughout and does not implement wheel
-conditions. The next wheel-enabled strategy will use the live IK relation
+Strategy 1.2.0 adds wheel `rest`, live-IK speed, and fixed-torque assist
+conditions. Hubs remain rest during startup, holds, recovery, completion, and
+abort. During a hip-motion phase it uses the live IK relation
 `wheel_rate = -L*cos(commanded_hip)*hip_rate/R`; speed mode uses the computed
 rate, while torque-assist mode uses a fixed configured torque magnitude whose
 sign follows that wheel-rate direction. Rest, brake, speed, torque, and
-feedback-captured position hold will be separately versioned conditions.
+feedback-captured position hold will be separately versioned conditions;
+brake and position hold are not implemented in 1.2.0.
 
 ## Version rule
 
-Every runnable YAML must set both a descriptive immutable `strategy_name` (for example `phase_a_two_state_baseline`) and numeric `strategy_version` (for example `1.1.0`). Change the version whenever sequence shape, guard logic, FF policy, wheel policy, gains, control reference, or analysis definition changes. `1.0.0` was the position-diff-compensated controller; `1.1.0` is the raw-motor controller. Do not overwrite an executed profile: copy it under a new dated run directory.
+Every runnable YAML must set both a descriptive immutable `strategy_name` (for example `phase_a_two_state_baseline`) and numeric `strategy_version` (for example `1.2.0`). Change the version whenever sequence shape, guard logic, FF policy, wheel policy, gains, control reference, or analysis definition changes. `1.0.0` was the position-diff-compensated controller; `1.1.0` is the raw-motor controller with hubs forced rest; `1.2.0` adds speed-IK and fixed-torque wheel assist. Do not overwrite an executed profile: copy it under a new dated run directory.
 
 The runner records the version and control reference in `trial_manifest.yaml`. Each row of `command_state_trace.csv` records phase, trial, commanded/observed motor position, position difference, reconstructed actual hip angle, torque, and error code. The later force/contact estimator must record its estimator version in the same run manifest and produce contact from the force estimate plus an explicitly recorded threshold.
