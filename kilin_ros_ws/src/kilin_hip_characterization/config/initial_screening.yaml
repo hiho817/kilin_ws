@@ -1,4 +1,5 @@
-# Conservative default; copy to a dated run folder before any armed trial.
+# Conservative raw-motor controller default; copy to a dated run folder before
+# any armed trial.  position_diff is logged but is not fed into the command.
 kilin_hip_characterization:
   ros__parameters:
     armed: false
@@ -6,7 +7,7 @@ kilin_hip_characterization:
     state_topic: /motor/state
     run_dir: ""
     strategy_name: phase_a_two_state_baseline
-    strategy_version: 1.0.0
+    strategy_version: 1.1.0
     repetitions: 3
     active_modules: [A, B]
     motion_mode: two_state_cycle

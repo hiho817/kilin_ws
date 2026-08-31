@@ -48,7 +48,7 @@ class CampaignRunner final : public rclcpp::Node {
     state_topic_ = declare_parameter<std::string>("state_topic", "/motor/state");
     run_dir_ = declare_parameter<std::string>("run_dir", "");
     strategy_name_ = declare_parameter<std::string>("strategy_name", "phase_a_two_state_baseline");
-    strategy_version_ = declare_parameter<std::string>("strategy_version", "1.0.0");
+    strategy_version_ = declare_parameter<std::string>("strategy_version", "1.1.0");
     active_modules_ = declare_parameter<std::vector<std::string>>("active_modules", {"A", "B"});
     repetitions_ = declare_parameter<int>("repetitions", 3);
     state_a_deg_ = declare_parameter<double>("state_a_deg", 0.0);
@@ -111,8 +111,8 @@ class CampaignRunner final : public rclcpp::Node {
   void begin() {
     for (size_t i = 0; i < 4; ++i) {
       if (!std::isfinite(actual(i))) throw std::runtime_error("non-finite hip feedback");
-      move_start_[i] = actual(i);
-      commanded_[i] = actual(i);
+      move_start_[i] = hips_[i].motor;
+      commanded_[i] = hips_[i].motor;
     }
     openEvidence();
     setPhase(Phase::kStartupMove, "moving to configured state A with wheels rest and zero FF");
@@ -146,10 +146,14 @@ class CampaignRunner final : public rclcpp::Node {
         message << " reason=hip_torque_limit measured=" << hips_[i].torque << " limit=" << max_torque_;
         return message.str();
       }
-      const double tracking_error = actual(i) - commanded_[i];
+      // Control is intentionally in the raw motor-position frame for strategy
+      // 1.1.0.  position_diff remains an observed quantity only; feeding its
+      // noisy/backlash-dependent value back into the motor position target
+      // caused command chatter on the real robot.
+      const double tracking_error = hips_[i].motor - commanded_[i];
       if (std::abs(tracking_error) > max_error_rad_) {
-        message << " reason=hip_tracking_error_limit commanded_actual_rad=" << commanded_[i]
-                << " actual_rad=" << actual(i) << " error_rad=" << tracking_error
+        message << " reason=hip_motor_tracking_error_limit commanded_motor_rad=" << commanded_[i]
+                << " motor_position_rad=" << hips_[i].motor << " error_rad=" << tracking_error
                 << " abs_limit_rad=" << max_error_rad_;
         return message.str();
       }
@@ -164,9 +168,12 @@ class CampaignRunner final : public rclcpp::Node {
     for (size_t i = 0; i < 4; ++i) {
       commanded_[i] = target[i];
       legs[i].hip.motor_mode = kPosition;
-      legs[i].hip.position = target[i] - hips_[i].diff;
+      // Do not compensate the motor command with position_diff.  It is kept in
+      // the state/logging path as the reconstructed actual hip angle, but it is
+      // not part of this low-level position-control loop.
+      legs[i].hip.position = target[i];
       legs[i].hip.kp = kp_; legs[i].hip.ki = ki_; legs[i].hip.kd = kd_;
-      legs[i].hip.torque = allow_ff ? feedforward(i, target[i] - actual(i)) : 0.0;
+      legs[i].hip.torque = allow_ff ? feedforward(i, target[i] - hips_[i].motor) : 0.0;
       legs[i].steering.motor_mode = kPosition;
       legs[i].steering.position = 0.0;
       legs[i].hub.motor_mode = kRest;
@@ -234,7 +241,7 @@ class CampaignRunner final : public rclcpp::Node {
         break;
       case Phase::kRecoveryRest:
         publishRest();
-        if (elapsed() >= recovery_rest_s_) { for (size_t i = 0; i < 4; ++i) move_start_[i] = actual(i); setPhase(Phase::kRecoveryMove, "moving to configured recovery position"); }
+        if (elapsed() >= recovery_rest_s_) { for (size_t i = 0; i < 4; ++i) move_start_[i] = hips_[i].motor; setPhase(Phase::kRecoveryMove, "moving to configured recovery position"); }
         break;
       case Phase::kRecoveryMove:
         commandPosition(interpolated(move_start_, r, smooth(elapsed() / moveDuration(true))), false);
@@ -258,8 +265,8 @@ class CampaignRunner final : public rclcpp::Node {
   void complete() { publishRest(); setPhase(Phase::kComplete, "all repetitions and recovery complete"); RCLCPP_INFO(get_logger(), "Campaign complete."); rclcpp::shutdown(); }
   void stamp(kilin_msgs::msg::MotorCmdStamped &message) { const auto t = now(); message.header.seq = sequence_++; message.header.time.sec = static_cast<int32_t>(t.seconds()); message.header.time.nanosec = static_cast<uint32_t>(t.nanoseconds() % 1000000000LL); message.header.frame_id = "kilin_hip_characterization"; }
   void publishRest() { kilin_msgs::msg::MotorCmdStamped message; stamp(message); kilin_msgs::msg::LegCmd leg; leg.hip.motor_mode=kRest; leg.steering.motor_mode=kRest; leg.hub.motor_mode=kBrake; message.module_a=leg;message.module_b=leg;message.module_c=leg;message.module_d=leg;publisher_->publish(message); }
-  void openEvidence() { if (run_dir_.empty()) return; fs::create_directories(run_dir_); trace_.open(fs::path(run_dir_) / "command_state_trace.csv"); trace_ << "time_s,phase,trial,module,commanded_actual_rad,actual_rad,hip_torque,error_code\n"; std::ofstream manifest(fs::path(run_dir_) / "trial_manifest.yaml"); manifest << "strategy_name: " << strategy_name_ << "\nstrategy_version: " << strategy_version_ << "\nangle_convention: actual_hip_angle_rad = motor_position + position_diff\n"; }
-  void writeTrace() { if (!trace_) return; for (size_t i=0;i<4;++i) trace_ << now().seconds() << ',' << phaseName(phase_) << ',' << completed_repetitions_ + 1 << ',' << kModuleNames[i] << ',' << commanded_[i] << ',' << actual(i) << ',' << hips_[i].torque << ',' << hips_[i].error << '\n'; }
+  void openEvidence() { if (run_dir_.empty()) return; fs::create_directories(run_dir_); trace_.open(fs::path(run_dir_) / "command_state_trace.csv"); trace_ << "time_s,phase,trial,module,commanded_motor_rad,motor_position_rad,position_diff_rad,actual_hip_angle_rad,hip_torque,error_code\n"; std::ofstream manifest(fs::path(run_dir_) / "trial_manifest.yaml"); manifest << "strategy_name: " << strategy_name_ << "\nstrategy_version: " << strategy_version_ << "\nangle_convention: actual_hip_angle_rad = motor_position + position_diff\ncontrol_angle_reference: motor_position (position_diff is measurement-only)\n"; }
+  void writeTrace() { if (!trace_) return; for (size_t i=0;i<4;++i) trace_ << now().seconds() << ',' << phaseName(phase_) << ',' << completed_repetitions_ + 1 << ',' << kModuleNames[i] << ',' << commanded_[i] << ',' << hips_[i].motor << ',' << hips_[i].diff << ',' << actual(i) << ',' << hips_[i].torque << ',' << hips_[i].error << '\n'; }
 
   bool armed_{false}, have_state_{false}; int repetitions_{3}, completed_repetitions_{0}; uint32_t sequence_{0};
   std::string command_topic_, state_topic_, run_dir_, strategy_name_, strategy_version_; std::vector<std::string> active_modules_;

@@ -8,8 +8,8 @@ One ROS 2 package for low-level hip-transmission characterization, PID and bound
 - Real actuation requires both `armed:=true` and an explicit real command topic.
 - It sends nothing until `/motor/state` is fresh, then captures current hip and hub feedback as its starting state.
 - New-recording convention is `actual_hip_angle_rad = motor_position + position_diff`.
-- Hip commands target that reconstructed physical angle: the motor-side command is `desired_actual - current_position_diff`.
-- Safety aborts on stale state, non-finite state, motor error code, configured hip-torque bound, or configured actual-angle tracking bound. Abort sends hip rest and hub brake.
+- Strategy **1.1.0** commands the raw motor-position reference directly. `position_diff` is not fed back into the position or FF loop.
+- `actual_hip_angle_rad` is still reconstructed and recorded for offline transmission/force analysis. Safety aborts on stale state, non-finite state, motor error code, configured hip-torque bound, or configured raw-motor tracking bound. Abort sends hip rest and hub brake.
 
 The package does not modify `kilin_com_estimator`, the terrain planner, or FAST-LIO2.
 
@@ -55,7 +55,7 @@ The master runner merges `kilin_hip_batch.defaults` with each test's
 | `run_dir` | string / empty | Evidence folder. Required for an armed direct controller invocation; the helpers set it automatically. |
 | `bag_topics` | string list / six base topics | Topics passed to `ros2 bag record` by `single_runner.py` or `batch_runner.py`. Place it in a direct profile's `ros__parameters`, or master `defaults`; a unit-test override may replace it. The helper removes it before passing the resolved profile to the C++ controller and saves the final list as `bag_topics.txt`. |
 | `strategy_name` | string | Human-readable control/analysis strategy name, recorded in the manifest. |
-| `strategy_version` | numeric string | Revision of that strategy, e.g. `1.0.0`, recorded in the manifest. |
+| `strategy_version` | numeric string | Revision of that strategy, e.g. `1.1.0`, recorded in the manifest. Use `1.1.0` or a later new version for the raw-motor controller; do not reuse `1.0.0` compensated-run profiles. |
 
 ### Test selection and geometry
 
@@ -63,10 +63,10 @@ The master runner merges `kilin_hip_batch.defaults` with each test's
 | --- | --- | --- |
 | `active_modules` | string list / `[A,B]` | Hips selected for the unit. `A,B` are front; `C,D` rear; `A,C` left; `B,D` right. Inactive hips are commanded to physical zero during position phases. |
 | `repetitions` | integer / `3` | Number of complete A→B→A cycles before recovery. Must be at least one; use three or more for analysis. |
-| `state_a_deg` | degrees / `0` | Initial and return hip magnitude. The runner maps front hips to negative and rear hips to positive physical angles. |
-| `state_b_deg` | degrees / `45` | Other hip magnitude for the same mapping. `(0,45)` is baseline; `(15,45)` deliberately starts from a nonzero extension. |
-| `startup_move_speed_rad_s` | rad/s / `0.1` | Smooth position move from current measured angle to state A before the unit test. Hip FF is forced to zero and wheels rest. |
-| `recovery_position_deg` | degrees / `0` | Active-hip magnitude reached after every unit test. |
+| `state_a_deg` | degrees / `0` | Initial and return **motor-position reference** magnitude. The runner maps front hips to negative and rear hips to positive references. This is not corrected by `position_diff`. |
+| `state_b_deg` | degrees / `45` | Other motor-position reference magnitude for the same mapping. `(0,45)` is baseline; `(15,45)` deliberately starts from a nonzero reference. |
+| `startup_move_speed_rad_s` | rad/s / `0.1` | Smooth position move from current measured **motor position** to state A before the unit test. Hip FF is forced to zero and wheels rest. |
+| `recovery_position_deg` | degrees / `0` | Active-hip motor-position reference reached after every unit test. |
 | `recovery_move_speed_rad_s` | rad/s / `0.1` | Smooth state-A/recovery move speed after the all-motor rest interval. |
 | `recovery_rest_s` | seconds / `1.0` | Rest interval between the final cycle and the recovery move; feedback continues to be read. |
 
@@ -135,19 +135,21 @@ undifferentiated score.
 | Parameter | Type / default | Exact effect |
 | --- | --- | --- |
 | `max_state_age_s` | seconds / `0.10` | Maximum acceptable age of `/motor/state`. A stale state rests all motors and aborts. |
-| `max_abs_hip_error_rad` | radians / `0.35` | Largest allowed actual-minus-commanded reconstructed hip-angle error. A breach aborts. |
+| `max_abs_hip_error_rad` | radians / `0.35` | Largest allowed measured-motor-minus-commanded-motor error. A breach aborts. It is deliberately not based on reconstructed actual hip angle in strategy 1.1.0. |
 | `max_abs_hip_torque_nm` | feedback units / `400` | Largest allowed absolute hip torque feedback value. A breach aborts. Confirm feedback units on hardware before changing it. |
 
 The runner logs phase changes to the terminal and `launch.log`: startup move,
 state-A hold, static release, move to B, hold at B, return to A, recovery
-rest, recovery move, complete, or aborted. `command_state_trace.csv` uses
+rest, recovery move, complete, or aborted. `command_state_trace.csv` records
+the controller pair `commanded_motor_rad`/`motor_position_rad`, alongside
+`position_diff_rad` and the observation-only reconstruction
 `actual_hip_angle_rad = motor_position + position_diff`.
 
 On every abort, the terminal and `launch.log` identify the module, phase,
 reason, measured value, and configured limit where applicable. The same reason
 is saved as `<run_dir>/abort_reason.txt`. For example, a tracking abort reports
-`module=A phase=move_to_state_b reason=hip_tracking_error_limit` plus
-commanded actual angle, measured actual angle, signed error, and its absolute
+`module=A phase=move_to_state_b reason=hip_motor_tracking_error_limit` plus
+commanded motor angle, measured motor angle, signed error, and its absolute
 limit.
 
 ## Run directory and recording

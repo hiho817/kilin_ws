@@ -4,10 +4,11 @@ This package is the shared unit-test package for (1) hip tracking/PID/feedforwar
 
 ## Safety model
 
-- `actual_hip_angle_rad = motor_position + position_diff`.
-- An armed run performs a controlled move from fresh feedback to configured state A at `startup_move_speed_rad_s`, with zero FF and wheels rest.
+- `actual_hip_angle_rad = motor_position + position_diff` is retained as an observed/recorded transmission measurement.
+- Strategy `1.1.0` commands and tracks raw `motor_position`; it does not feed `position_diff` into the position target or FF direction. This isolates the worm-gear/PID experiment from angle-difference feedback chatter.
+- An armed run performs a controlled move from fresh motor feedback to configured state A at `startup_move_speed_rad_s`, with zero FF and wheels rest.
 - Every unit test follows the explicit sequence, then rests all motors, reads feedback, and moves active hips to `recovery_position_deg` before completion.
-- Fresh motor state, torque, motor-error and actual-angle tracking limits abort the run.
+- Fresh motor state, torque, motor-error and raw-motor tracking limits abort the run. Reconstructed actual angle is recorded for analysis, not used by this controller revision.
 - Steering is position-held at zero.  Hub position mode captures the measured hub position at startup, avoiding an unintended move to position zero.
 
 ## Motion modes
@@ -26,6 +27,6 @@ Wheel speed uses the live IK relation `wheel_rate = -L*cos(commanded_hip)*hip_ra
 
 ## Version rule
 
-Every runnable YAML must set both a descriptive immutable `strategy_name` (for example `phase_a_two_state_baseline`) and numeric `strategy_version` (for example `1.0.0`). Change the version whenever sequence shape, guard logic, FF policy, wheel policy, gains, or analysis definition changes. Do not overwrite an executed profile: copy it under a new dated run directory.
+Every runnable YAML must set both a descriptive immutable `strategy_name` (for example `phase_a_two_state_baseline`) and numeric `strategy_version` (for example `1.1.0`). Change the version whenever sequence shape, guard logic, FF policy, wheel policy, gains, control reference, or analysis definition changes. `1.0.0` was the position-diff-compensated controller; `1.1.0` is the raw-motor controller. Do not overwrite an executed profile: copy it under a new dated run directory.
 
-The runner records the version, complete sequence, gains, FF fields and wheel mode in `trial_manifest.yaml`; every row of `command_state_trace.csv` also carries `strategy_version`, `trial`, `phase`, and `segment`.  The later force/contact estimator must record its estimator version in the same run manifest and produce contact from the force estimate plus an explicitly recorded threshold.
+The runner records the version and control reference in `trial_manifest.yaml`. Each row of `command_state_trace.csv` records phase, trial, commanded/observed motor position, position difference, reconstructed actual hip angle, torque, and error code. The later force/contact estimator must record its estimator version in the same run manifest and produce contact from the force estimate plus an explicitly recorded threshold.
