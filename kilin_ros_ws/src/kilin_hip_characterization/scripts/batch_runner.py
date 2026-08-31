@@ -12,15 +12,21 @@ def main():
     for index,test in enumerate(tests,1):
         name=test["name"]; params=dict(defaults);params.update(test.get("parameters",{})); params.pop("name",None)
         run=a.run_root/f"{index:03d}_{name}";run.mkdir(); profile=run/"resolved_profile.yaml"
+        print(f"[batch] {index}/{len(tests)} starting {name}")
         params.update({"armed":True,"command_topic":"/motor/command","run_dir":str(run)})
         profile.write_text(yaml.safe_dump({"kilin_hip_characterization":{"ros__parameters":params}},sort_keys=False))
         bag=subprocess.Popen(["ros2","bag","record","-o",str(run/"bag"),"/motor/state","/motor/command","/power/state","/power/command","/tf","/tf_static"],stdout=(run/"bag.log").open("w"),stderr=subprocess.STDOUT)
         try:
-            result=subprocess.run(["ros2","run","kilin_hip_characterization","campaign_runner","--ros-args","--params-file",str(profile)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-            (run/"launch.log").write_text(result.stdout)
+            output=[]
+            with (run/"launch.log").open("w") as log:
+                process=subprocess.Popen(["ros2","run","kilin_hip_characterization","campaign_runner","--ros-args","--params-file",str(profile)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,bufsize=1)
+                for line in process.stdout:
+                    print(f"[{name}] {line}",end=""); log.write(line); log.flush(); output.append(line)
+                result=process.wait()
+            output="".join(output)
         finally:
             bag.send_signal(signal.SIGINT);bag.wait()
-        if result.returncode or "Campaign aborted" in result.stdout or "Campaign refused" in result.stdout:
+        if result or "Campaign aborted" in output or "Campaign refused" in output:
             print(f"Batch stopped at {name}; see {run}",file=sys.stderr);sys.exit(1)
     print(f"Batch complete: {a.run_root}")
 if __name__=="__main__":main()

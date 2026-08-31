@@ -5,8 +5,8 @@ This package is the shared unit-test package for (1) hip tracking/PID/feedforwar
 ## Safety model
 
 - `actual_hip_angle_rad = motor_position + position_diff`.
-- An armed run is refused unless all hips are already within `startup_state_tolerance_deg` of configured state A. The runner never repositions the robot to find that state.
-- Every trial begins at state A, follows an explicit sequence, returns to state A, holds, then sends hip rest and hub brake.
+- An armed run performs a controlled move from fresh feedback to configured state A at `startup_move_speed_rad_s`, with zero FF and wheels rest.
+- Every unit test follows the explicit sequence, then rests all motors, reads feedback, and moves active hips to `recovery_position_deg` before completion.
 - Fresh motor state, torque, motor-error and actual-angle tracking limits abort the run.
 - Steering is position-held at zero.  Hub position mode captures the measured hub position at startup, avoiding an unintended move to position zero.
 

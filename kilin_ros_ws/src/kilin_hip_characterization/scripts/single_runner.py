@@ -8,11 +8,23 @@ def main():
     if not a.armed:p.error("refusing to actuate without --armed")
     if a.run_dir.exists():p.error(f"run directory already exists: {a.run_dir}")
     a.run_dir.mkdir(parents=True); target=a.run_dir/"profile.yaml";target.write_text(a.profile.read_text())
+    print(f"[single] profile={a.profile}")
+    print(f"[single] evidence={a.run_dir}")
+    print("[single] starting bag recorder")
     bag=subprocess.Popen(["ros2","bag","record","-o",str(a.run_dir/"bag"),"/motor/state","/motor/command","/power/state","/power/command","/tf","/tf_static"],stdout=(a.run_dir/"bag.log").open("w"),stderr=subprocess.STDOUT)
     try:
-        result=subprocess.run(["ros2","run","kilin_hip_characterization","campaign_runner","--ros-args","--params-file",str(target),"-p","armed:=true","-p","command_topic:=/motor/command","-p",f"run_dir:={a.run_dir}"],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-        (a.run_dir/"launch.log").write_text(result.stdout)
+        command=["ros2","run","kilin_hip_characterization","campaign_runner","--ros-args","--params-file",str(target),"-p","armed:=true","-p","command_topic:=/motor/command","-p",f"run_dir:={a.run_dir}"]
+        print("[single] controller started; phase messages follow")
+        output=[]
+        with (a.run_dir/"launch.log").open("w") as log:
+            process=subprocess.Popen(command,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,bufsize=1)
+            for line in process.stdout:
+                print(line,end=""); log.write(line); log.flush(); output.append(line)
+            result=process.wait()
+        output="".join(output)
     finally:
         bag.send_signal(signal.SIGINT);bag.wait()
-    if result.returncode or "Campaign aborted" in result.stdout or "Campaign refused" in result.stdout:sys.exit(1)
+    print(f"[single] controller exit={result}; bag closing")
+    if result or "Campaign aborted" in output or "Campaign refused" in output:sys.exit(1)
+    print(f"[single] complete: {a.run_dir}")
 if __name__=="__main__":main()
