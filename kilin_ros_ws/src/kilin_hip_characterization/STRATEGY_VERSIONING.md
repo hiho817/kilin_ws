@@ -15,25 +15,43 @@ This package is the shared unit-test package for (1) hip tracking/PID/feedforwar
 
 `two_state_cycle` alternates `state_a_deg` and `state_b_deg`. With three repetitions, `(0, 45)` is `0→45→0→45→0→45→0`, and `(15, 45)` is `15→45→15→45→15→45→15`. `outward_sequence` accepts magnitudes such as `[0, 10, 20, 30, 20, 30]` and returns to its first state. Positive magnitude maps to front hips negative and rear hips positive, so the same profile works for front/rear/left/right selections.
 
-The first outward segment has a smooth, low-distance static-release portion.  All remaining distance then runs at the requested `hip_speed_rad_s`; other segments run at that constant speed.  This separates breakaway friction from dynamic tracking.
+All A→B and B→A trajectory distance runs at the requested `hip_speed_rad_s`.
+There is no separate static-release trajectory. The optional near-zero
+breakaway policy is evaluated only during those normal moving phases.
 
 ## Feedforward policy
 
-There are independent direct motor-command terms: `hip_ff_outward_direct`, `hip_ff_inward_direct`, `hip_ff_static_outward_direct`, and `hip_ff_static_inward_direct`.  Their sign is always computed from the planned motion direction, including front/rear sign reversal.  No gearbox conversion is applied.
+Strategy `1.5.2` has no fixed direct hip FF or directional gain parameters.
+The selected outward/inward step or exponential schedule is the sole asymmetric
+amplitude term in the nonlinear near-zero FF equation. The raw tracking error,
+mapped by front/rear module sign, selects the outward/inward schedule; its raw
+sign determines corrective torque polarity. A positive schedule value assists
+that error sign and a negative value opposes it. No gearbox conversion is
+applied.
 
-FF is disabled during zero/hold states, when desired velocity is too small, when the measured error is opposite to the planned move, and with enable/disable error hysteresis near target.  This avoids sign chatter and unstable assistance when commanded and actual positions are close.  `max_abs_hip_ff_torque_nm` remains a dedicated 200 command clamp.
+FF is disabled during startup/holds/recovery, when the policy is disabled, when
+the commanded angle is outside its hard window, when the raw error is inside
+the 0.01 rad deadband, or after the selected-velocity release latch fires.
+The error sign mapped by the module convention selects outward/inward
+parameters, and its raw sign selects corrective torque polarity.
+`max_abs_hip_ff_torque_nm` remains the dedicated 200-command clamp.
 
-Strategy 1.2.1 adds wheel `rest`, live-IK speed, and fixed-torque assist
+Strategy 1.5.2 adds explicit `filtered`/`raw` velocity-source selection with
+`raw` as the default, schedule-only asymmetry, and `none`/`sine` angle shaping.
+It supports a three-step or exponential dwell schedule, error
+hysteresis, optional velocity fade/release latch, and the hard angle window.
+When enabled it is the complete hip FF only in normal moving phases; otherwise
+hip FF is zero.
 conditions. Hubs remain rest during startup, holds, recovery, completion, and
 abort. During a hip-motion phase it uses the live IK relation
 `wheel_rate = -L*cos(commanded_hip)*hip_rate/R`; speed mode uses the computed
 rate, while torque-assist mode uses a fixed signed configured torque: positive
 assists that wheel-rate direction and negative opposes it. Rest, brake, speed, torque, and
 feedback-captured position hold will be separately versioned conditions;
-brake and position hold are not implemented in 1.2.1.
+brake and position hold are not implemented in 1.5.2.
 
 ## Version rule
 
-Every runnable YAML must set both a descriptive immutable `strategy_name` (for example `phase_a_two_state_baseline`) and numeric `strategy_version` (for example `1.2.1`). Change the version whenever sequence shape, guard logic, FF policy, wheel policy, gains, control reference, or analysis definition changes. `1.0.0` was the position-diff-compensated controller; `1.1.0` is the raw-motor controller with hubs forced rest; `1.2.0` adds speed-IK and fixed-torque wheel assist; `1.2.1` permits signed fixed wheel torque. Do not overwrite an executed profile: copy it under a new dated run directory.
+Every runnable YAML must set both a descriptive immutable `strategy_name` (for example `phase_a_two_state_baseline`) and numeric `strategy_version` (for example `1.5.2`). Change the version whenever sequence shape, guard logic, FF policy, wheel policy, gains, control reference, or analysis definition changes. `1.0.0` was the position-diff-compensated controller; `1.1.0` is the raw-motor controller with hubs forced rest; `1.2.0` adds speed-IK and fixed-torque wheel assist; `1.2.1` permits signed fixed wheel torque; `1.2.2` permits signed hip FF; `1.3.0` added the nonlinear breakaway policy; `1.3.1` removes its separate trajectory phase and adds the hard angle window; `1.4.0` added raw/filtered velocity-source selection; `1.5.0` removed fixed hip FF keys and restricted angle shaping to none or sine; `1.5.1` removes directional gains so asymmetry resides solely in the outward/inward schedules; `1.5.2` selects those schedules from error direction mapped by module convention. Do not overwrite an executed profile: copy it under a new dated run directory.
 
 The runner records the version and control reference in `trial_manifest.yaml`. Each row of `command_state_trace.csv` records phase, trial, commanded/observed motor position, position difference, reconstructed actual hip angle, torque, and error code. The later force/contact estimator must record its estimator version in the same run manifest and produce contact from the force estimate plus an explicitly recorded threshold.

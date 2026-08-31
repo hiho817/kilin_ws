@@ -8,8 +8,8 @@ One ROS 2 package for low-level hip-transmission characterization, PID and bound
 - Real actuation requires both `armed:=true` and an explicit real command topic.
 - It sends nothing until `/motor/state` is fresh, then captures current hip and hub feedback as its starting state.
 - New-recording convention is `actual_hip_angle_rad = motor_position + position_diff`.
-- Strategy **1.2.1** commands the raw motor-position reference directly. `position_diff` is not fed back into the position or FF loop.
-- `actual_hip_angle_rad` is still reconstructed and recorded for offline transmission/force analysis. Safety aborts on stale state, non-finite state, motor error code, configured hip-torque bound, or configured raw-motor tracking bound. Abort sends hip rest and hub brake.
+- Strategy **1.5.2** commands the raw motor-position reference directly. `position_diff` is not fed back into the position or FF loop.
+- `actual_hip_angle_rad` is still reconstructed and recorded for offline transmission/force analysis. Safety aborts on stale state, non-finite state, motor error code, configured hip-torque bound, or configured raw-motor tracking bound. Abort sends all motors to rest.
 
 The package does not modify `kilin_com_estimator`, the terrain planner, or FAST-LIO2.
 
@@ -18,11 +18,14 @@ The package does not modify `kilin_com_estimator`, the terrain planner, or FAST-
 The runner performs a two-state cycle for each repetition:
 
 ```text
-state-A hold → slow static-release ramp → dynamic move to state B
-→ segment hold → return to state A → final state-A hold
+state-A hold → constant-speed move to state B → segment hold
+→ constant-speed return to state A → recovery
 ```
 
-The static-release segment is intentional: worm-gear breakaway/static friction must be measured separately from the dynamic part. The runner logs phase IDs, therefore offline analysis can compare static-to-dynamic transition behavior directly.
+There is no separate static-release phase. Worm-gear breakaway assistance, if
+enabled, is evaluated only as a bounded part of the ordinary A→B or B→A move.
+The trace records the complete policy-generated FF command and its internal
+breakaway contribution.
 
 The initial profile is `config/initial_screening.yaml`. For experiments, keep
 one direct `profile.yaml` or one master `master.yaml` in the dated log
@@ -35,17 +38,17 @@ control policy requires a new name/version before an experiment is run.
 
 ### Wheel modes
 
-Strategy **1.2.1** has one explicit `wheel_mode`, recorded in the run manifest
+Strategy **1.5.2** has one explicit `wheel_mode`, recorded in the run manifest
 and trace. Hubs are always `rest` during startup, both hold phases, recovery,
-completion, and abort. Wheel commands are active only during static release,
-the dynamic A→B move, and the B→A return.
+completion, and abort. Wheel commands are active only during the normal A→B
+and B→A moves.
 
 | Future mode | Hub command during hip test | Intended use and safety rule |
 | --- | --- | --- |
 | `rest` | Hub motor mode `rest`; no active velocity or torque command. | Baseline hip-only test. |
 | `speed_ik` (or alias `speed`) | Hub velocity is calculated live from the commanded hip trajectory at every control tick. | The wheel follows hip motion kinematically; it is never a fixed speed. The command field uses the established RPM-times-ten unit: `hub.velocity = wheel_rate_rad_s × 60 × 10 / (2π)`. |
 | `torque_assist` (or alias `torque`) | Hub torque magnitude is a fixed signed configuration value. The IK wheel rate chooses the reference direction. | Positive values assist `speed_ik`; negative values oppose it. The torque magnitude is **not** calculated from IK. Outward and inward values may differ and are clamped. |
-| `brake` / `position_hold` | Not implemented in 1.2.1. | A profile using either is rejected before commanding hardware. Position hold will require feedback-captured position before it is introduced. |
+| `brake` / `position_hold` | Not implemented in 1.5.2. | A profile using either is rejected before commanding hardware. Position hold will require feedback-captured position before it is introduced. |
 
 For `speed_ik`, IK supplies both the live wheel-rate magnitude and direction.
 For `torque_assist`, IK supplies **only the reference direction**; the signed
@@ -88,7 +91,7 @@ The master runner merges `kilin_hip_batch.defaults` with each test's
 | `run_dir` | string / empty | Evidence folder. Required for an armed direct controller invocation; the helpers set it automatically. |
 | `bag_topics` | string list / six base topics | Topics passed to `ros2 bag record` by `single_runner.py` or `batch_runner.py`. Place it in a direct profile's `ros__parameters`, or master `defaults`; a unit-test override may replace it. The helper removes it before passing the resolved profile to the C++ controller and saves the final list as `bag_topics.txt`. |
 | `strategy_name` | string | Human-readable control/analysis strategy name, recorded in the manifest. |
-| `strategy_version` | numeric string | Revision of that strategy, e.g. `1.2.1`, recorded in the manifest. Use `1.2.1` for this raw-motor, wheel-mode-capable controller; do not reuse `1.0.0` compensated-run profiles. |
+| `strategy_version` | numeric string | Revision of that strategy, e.g. `1.5.2`, recorded in the manifest. Use `1.5.2` for this raw-motor, wheel-mode-capable controller; do not reuse `1.0.0` compensated-run profiles. |
 
 ### Test selection and geometry
 
@@ -107,73 +110,331 @@ The master runner merges `kilin_hip_batch.defaults` with each test's
 
 | Parameter | Type / default | Exact effect |
 | --- | --- | --- |
-| `hip_speed_rad_s` | rad/s / `0.2` | Constant-speed dynamic portion of A→B and B→A motion. It must be positive. |
-| `start_zero_hold_s` | seconds / `2.0` | Position hold at state A after startup, before static release. The name is historical; it applies even when A is not zero. |
-| `static_release_ramp_s` | seconds / `1.0` | Smooth duration of the initial low-distance static-release segment. |
-| `static_release_fraction` | fraction / `0.15` | Fraction of the A→B stroke assigned to static release. The remaining fraction is the constant-speed dynamic move. Use `0.15` initially. |
+| `hip_speed_rad_s` | rad/s / `0.2` | Constant trajectory speed for the entire A→B and B→A moves. It must be positive. |
+| `start_zero_hold_s` | seconds / `2.0` | Position hold at state A after startup and before every A→B move. The name is historical; it applies even when A is not zero. |
 | `segment_hold_s` | seconds / `1.0` | Position hold at state B before returning to A. |
 | `kp`, `ki`, `kd` | direct motor gains / `360,0,5` | Hip position-loop gains copied directly into every hip `MotorCmd`. Change only one candidate dimension at a time during PID screening. |
 
-#### Static-release phase in detail
+### Near-zero breakaway policy (strategy 1.5.2)
 
-Static release is the deliberately slow first part of every A→B movement. It
-is intended to reveal worm-gear breakaway, stiction, and backlash before the
-constant-speed tracking result is mixed in.
+This is the nonlinear worm-gear breakaway policy. It is disabled by default:
 
-For an A→B stroke of `D = state_b_deg - state_a_deg`, the runner executes:
+    static_breakaway_policy: disabled
+
+Strategy **1.5.2** has no directional gain parameters. Asymmetry comes only
+from the separately configured outward and inward schedules $S_d(t_d)$. With
+policy `disabled`, hip FF is zero. With policy enabled, this is the complete
+hip FF during normal A→B and B→A motion.
+
+For one hip, define the raw motor tracking error
+
+$$e = q_{\mathrm{cmd}} - q_{\mathrm{motor}}.$$
+
+The commanded hip FF is
+
+$$
+\tau_{\mathrm{ff}} = \operatorname{clip}_{[-\tau_{\max},\tau_{\max}]}
+\left[
+\operatorname{sgn}(e)\,A_d(t_d)\,G_e(|e|)\,G_v(|v_s|)\,G_q(|q_{\mathrm{cmd}}|)
+\right].
+$$
+
+This is exactly the trace field `commanded_hip_ff` and the motor command
+torque. There is no second fixed FF term.
+
+| Symbol | Code/profile name | Meaning |
+| --- | --- | --- |
+| $q_{\mathrm{cmd}}$ | `commanded_motor_rad` | Commanded raw motor position [rad]. |
+| $q_{\mathrm{motor}}$ | `motor_position_rad` | Measured raw motor position [rad]. |
+| $e$ | `q_cmd - q_motor` | Raw motor tracking error [rad]. `position_diff` is not used. |
+| $s_{\mathrm{module}}$ | fixed module convention | `-1` for A/B and `+1` for C/D; maps raw error direction to the physical outward/inward label. |
+| $\tau_{\mathrm{ff}}$ | `commanded_hip_ff` | Final bounded hip FF command. |
+| $\tau_{\max}$ | `max_abs_hip_ff_torque_nm` | Absolute FF command limit (default 200). |
+| $d$ | outward/inward | Physical label selected from error direction: outward when $e\,s_{\mathrm{module}}>0$; A/B use $s=-1$, C/D use $s=+1$. |
+| $t_d$ | `static_breakaway_dwell_s` | Per-hip runtime dwell timer [s]. This is a trace/manifest observable, not a YAML setting. It starts at zero when each A→B or B→A move begins and increases by the control-tick interval only while the error and velocity eligibility gates are satisfied. |
+| $v_s$ | `breakaway_velocity_used_rad_s` | Selected velocity used by the policy [rad/s]; raw by default, or filtered when configured. |
+| $e_{\mathrm{enable}}$ | `static_breakaway_error_enable_rad` | Error magnitude [rad] that enables the hysteretic error gate. |
+| $e_{\mathrm{full}}$ | `static_breakaway_error_full_rad` | Error magnitude [rad] at which the error gate reaches one. |
+| $e_{\mathrm{disable}}$ | `static_breakaway_error_disable_rad` | Error magnitude [rad] that disables the gate after it was enabled. |
+| $u$ | intermediate variable | Normalized error coordinate clipped to $[0,1]$. |
+| $G_e$ | `error_gate` | Error multiplier in $[0,1]$. |
+| $G_v$ | `velocity_gate` | Velocity-fade multiplier in $(0,1]$. |
+| $G_q$ | `angle_factor` | Angle multiplier after the hard window check. |
+| $A_d$ | `time_amplitude` | Signed direction-dependent amplitude before the gates [direct motor-command units]. |
+| $S_d$ | `static_breakaway_steps_*` or `static_breakaway_exp_*` | Direction-dependent schedule [direct motor-command units]. |
+| $t_1,t_2$ | `static_breakaway_step_1_s`, `_step_2_s` | Step transition times [s]. |
+| $\tau$ | `static_breakaway_exp_tau_s` | Exponential schedule time constant [s]. |
+| $v_{\mathrm{fade}}$ | `static_breakaway_velocity_fade_rad_s` | Velocity-fade scale [rad/s]. |
+| $p$ | `static_breakaway_velocity_fade_power` | Positive velocity-fade exponent. |
+| $b_d$ | `static_breakaway_angle_blend_outward/inward` | Direction-dependent angle blend in $[0,1]$. |
+| $q_{\min},q_{\max}$ | `static_breakaway_angle_min_deg`, `_max_deg` | Inclusive commanded-angle limits [degrees]. |
+| $\operatorname{sgn}(\cdot)$ | implementation operation | Returns $+1$ or $-1$ from its argument; here it uses the sign of $e$, not the motion-direction classification. |
+| $\operatorname{clip}$ | implementation operation | Saturates a value to the stated lower and upper bounds. |
+
+The signed asymmetric amplitude is
+
+$$A_d(t_d) = S_d(t_d).$$
+
+The error direction determines both the selected physical schedule and the
+corrective torque polarity, but in two different ways. The physical label is
+module-dependent:
+
+$$
+d=
+\begin{cases}
+\mathrm{outward}, & e\,s_{\mathrm{module}}>0,\\
+\mathrm{inward}, & e\,s_{\mathrm{module}}<0.
+\end{cases}
+$$
+
+The torque polarity remains the raw error sign:
+
+$$
+\operatorname{sgn}(\tau_{\mathrm{ff}})
+=\operatorname{sgn}(e)\operatorname{sgn}(S_d),
+$$
+
+when the gates are nonzero. Thus outward/inward is **not identical to**
+`sign(e)`: the same positive error selects `inward` on a front module but
+`outward` on a rear module. This front/rear mapping is why the schedule name is
+a physical label rather than simply `positive_error` or `negative_error`.
+
+| Module group | Error sign | Physical label $d$ | Schedule selected | Positive schedule produces |
+| --- | --- | --- | --- | --- |
+| Front A/B ($s=-1$) | $e>0$ | inward | `*_inward_*` | positive FF |
+| Front A/B ($s=-1$) | $e<0$ | outward | `*_outward_*` | negative FF |
+| Rear C/D ($s=+1$) | $e>0$ | outward | `*_outward_*` | positive FF |
+| Rear C/D ($s=+1$) | $e<0$ | inward | `*_inward_*` | negative FF |
+
+The selected schedule can therefore change whenever error direction crosses
+zero. This is intentional in the requested error-direction strategy. The
+error-direction reversal also resets the dwell timer and release latch.
+`position_diff` participates in neither the physical-label mapping nor torque
+polarity.
+
+For `steps`, $S_d$ is the corresponding element of
+`static_breakaway_steps_outward_nm` or `_inward_nm`:
+
+$$
+S_d(t_d)=
+\begin{cases}
+S_{d,0}, & t_d < t_1,\\
+S_{d,1}, & t_1 \le t_d < t_2,\\
+S_{d,2}, & t_d \ge t_2,
+\end{cases}
+$$
+
+where $t_1$ and $t_2$ are `static_breakaway_step_1_s` and `_step_2_s`. For
+`exponential`,
+
+$$S_d(t_d)=S_{d,\mathrm{start}}+
+\left(S_{d,\mathrm{peak}}-S_{d,\mathrm{start}}\right)
+\left(1-e^{-t_d/\tau}\right),$$
+
+where $\tau$ is `static_breakaway_exp_tau_s`.
+
+Example: with `static_breakaway_exp_start_outward_nm: 40`,
+`static_breakaway_exp_peak_outward_nm: 80`, and
+`static_breakaway_exp_tau_s: 0.20`, at outward dwell $t_d=0.20$ s:
+
+$$S_{out}(0.20)=40+(80-40)(1-e^{-0.20/0.20})
+\approx 65.3.$$
+
+If the error is positive, the gates are all one, and the sine angle factor is
+one, the resulting FF is approximately $+65.3$ in the direct motor-command
+units. If the same motion has negative error, the result is approximately
+$-65.3$; it does not switch from outward to inward merely because the tracking
+error changed sign.
+
+The smooth error gate is $G_e=0$ until hysteresis enables, then
+
+$$G_e(|e|)=3u^2-2u^3,\qquad
+u=\operatorname{clip}_{[0,1]}
+\left(\frac{|e|-e_{\mathrm{enable}}}{e_{\mathrm{full}}-e_{\mathrm{enable}}}\right).$$
+
+Here $e_{\mathrm{enable}}$, $e_{\mathrm{full}}$, and the hysteresis release
+level are `static_breakaway_error_enable_rad`, `_full_rad`, and `_disable_rad`.
+When velocity fade is enabled,
+
+$$G_v(|v_s|)=\exp\left[-\left(\frac{|v_s|}{v_{\mathrm{fade}}}\right)^p\right],$$
+
+using `static_breakaway_velocity_fade_rad_s` for $v_{\mathrm{fade}}$ and
+`static_breakaway_velocity_fade_power` for $p$; it is one when fade speed is
+zero. $G_q$ is the optional angle factor described below.
+
+The equation is evaluated only when the commanded raw-motor reference lies in
+the inclusive `static_breakaway_angle_min_deg` to `_max_deg` window. Otherwise
+$\tau_{\mathrm{ff}}=0$ and dwell does not accumulate. Dwell resets if selected
+speed exceeds `static_breakaway_dwell_speed_rad_s` or error direction reverses.
+The policy latches off for the remaining move once selected speed reaches
+`static_breakaway_release_speed_rad_s`. Finally, `abs(e) < 0.01 rad` forces
+$\tau_{\mathrm{ff}}=0$.
+
+#### Gates, dwell, and release latch
+
+- Error hysteresis enables at static_breakaway_error_enable_rad, remains
+  eligible until error falls below static_breakaway_error_disable_rad, and
+  smoothly reaches full scale at static_breakaway_error_full_rad.
+- A reversal of error sign clears dwell and the release latch. This prevents a
+  previous breakaway pulse continuing after overshoot.
+- The hard inclusive angle window is checked first:
+  `static_breakaway_angle_min_deg <= abs(commanded_motor_deg) <=
+  static_breakaway_angle_max_deg`. Outside it, the added policy output is zero
+  and dwell does not accumulate. Defaults are 15–90 degrees.
+- Dwell accumulates only below `static_breakaway_dwell_speed_rad_s`. A faster
+  measured speed clears it.
+- `static_breakaway_dwell_s` is the resulting per-hip timer, not the speed
+  threshold. It is reset at the start of each moving phase, when selected speed
+  exceeds the dwell-speed threshold, or when the tracking-error direction
+  reverses. It is written to every trace row so the active step or exponential
+  amplitude can be reconstructed offline.
+- Release speed latches policy output off for the remaining current movement
+  phase. Set static_breakaway_release_speed_rad_s to zero to disable it.
+- A nonzero static_breakaway_velocity_fade_rad_s applies
+  exp(-(abs(v)/fade)^power), a soft reduction as motion begins. Set it to zero
+  to disable fading.
+
+Motor velocity comes from `/motor/state`. Set
+`static_breakaway_velocity_source: filtered` to use the low-pass value, where
+the latest-sample weight is `static_breakaway_velocity_filter_alpha`; set it to
+`raw` to use the message velocity directly for dwell, release, and fade.
+`raw_hip_velocity_rad_s`, `filtered_hip_velocity_rad_s`, and
+`breakaway_velocity_used_rad_s` are all recorded, so the selected source can
+be verified after the run.
+
+#### Temporal policies
+
+| `static_breakaway_policy` value | $S_d(t_d)$ schedule | Selection |
+| --- | --- | --- |
+| `disabled` | Zero hip FF. | Default; no policy influence. |
+| `steps` | Three signed plateaus selected by $t_1$ and $t_2$. | Choose this in the profile when you want three timed levels. |
+| `exponential` | $S_{start}+(S_{peak}-S_{start})(1-e^{-t_d/\tau})$. | Choose this in the profile for a smooth rise. |
+
+#### Angle shaping inside the hard window
+
+The hard 15–90 degree default window is applied before this optional shaping.
+Angle mode `none` gives $G_q=1$. Angle mode `sine` uses
+$G_q=(1-b_d)+b_d\sin(|q_{\mathrm{cmd}}|)$, where $b_d$ is the outward or
+inward blend. Thus blend zero disables angle scaling and blend one applies the
+full sine factor. The two blend parameters let outward and inward motion use
+different angle dependence:
+
+    angle_factor = (1-blend) + blend * sin(abs(commanded_motor_angle))
+
+The `static_breakaway_angle_blend_outward` and `_inward` values must be in
+$[0,1]$. They select the blend according to the current **error-based physical
+label** $d$:
+
+$$
+b_d=
+\begin{cases}
+\texttt{static\_breakaway\_angle\_blend\_outward}, & d=\mathrm{outward},\\
+\texttt{static\_breakaway\_angle\_blend\_inward}, & d=\mathrm{inward}.
+\end{cases}
+$$
+
+They do not select torque sign and do not change the outward/inward schedule.
+Those decisions remain respectively $\operatorname{sgn}(e)$ and
+$e\,s_{\mathrm{module}}$. The blend only scales the already-selected schedule
+amplitude through $G_q$.
+
+| Blend value $b_d$ | Resulting factor $G_q$ | Effect |
+| ---: | --- | --- |
+| `0.0` | $1$ | No angle dependence; the selected schedule is unchanged. |
+| `0<b_d<1` | $(1-b_d)+b_d\sin(|q_{\mathrm{cmd}}|)$ | Partial interpolation between constant amplitude and sine scaling. |
+| `1.0` | $\sin(|q_{\mathrm{cmd}}|)$ | Full sine scaling. |
+
+For example, full sine scaling gives approximately $0.259$ at 15°, $0.707$ at
+45°, and $1.000$ at 90°. With `blend_outward: 0.5`, outward FF at 45° is
+scaled by $(1-0.5)+0.5\times0.707\approx0.854$. With
+`blend_inward: 0.0`, inward FF remains unscaled at the same angle. Therefore
+the two parameters can represent different gravity/friction dependence for the
+two physical labels without altering torque polarity.
+
+The hard angle window is checked before this formula. Below the configured
+minimum or above the maximum, the complete policy output is zero regardless of
+either blend. Angle mode `none` also forces $G_q=1$, so both blend values have
+no effect until `static_breakaway_angle_mode: sine` is selected. Measure torque
+versus angle before assuming a gravity model.
+
+#### Static-breakaway parameter reference
+
+| Parameter | Default | Meaning |
+| --- | ---: | --- |
+| static_breakaway_policy | disabled | disabled, steps, or exponential; invalid values reject the run. |
+| static_breakaway_steps_outward_nm | [0,0,0] | Three signed outward step amplitudes. |
+| static_breakaway_steps_inward_nm | [0,0,0] | Three signed inward step amplitudes. |
+| static_breakaway_step_1_s / step_2_s | 0.10 / 0.30 | Time boundaries; step 2 must be no earlier than step 1. |
+| static_breakaway_exp_start_outward_nm / inward_nm | 0 | Signed initial exponential amplitude. |
+| static_breakaway_exp_peak_outward_nm / inward_nm | 0 | Signed asymptotic exponential amplitude. |
+| static_breakaway_exp_tau_s | 0.20 | Positive exponential time constant. |
+| static_breakaway_error_enable_rad | 0.02 | Error enabling breakaway eligibility. |
+| static_breakaway_error_full_rad | 0.05 | Error at which the smooth gate reaches one. |
+| static_breakaway_error_disable_rad | 0.01 | Error disabling the gate after enable. |
+| static_breakaway_dwell_speed_rad_s | 0.03 | Maximum speed accumulating dwell; zero disables this condition. |
+| static_breakaway_release_speed_rad_s | 0.10 | Speed latching output off; zero disables latch. |
+| static_breakaway_velocity_fade_rad_s | 0.05 | Soft-fade speed; zero disables fade. |
+| static_breakaway_velocity_fade_power | 2 | Positive velocity-fade exponent. |
+| static_breakaway_velocity_filter_alpha | 0.20 | New motor-speed sample weight, in (0,1]. |
+| static_breakaway_velocity_source | raw | `raw` uses `/motor/state` velocity directly; `filtered` uses the low-pass value for dwell, release, and fade. |
+| static_breakaway_angle_mode | none | `none` or `sine`; sine uses $\sin(|q_{\mathrm{cmd}}|)$. |
+| static_breakaway_angle_blend_outward / inward | 0 | Direction-specific blend $b_d$ in $[0,1]$: zero gives no angle scaling, one gives full sine scaling. |
+| static_breakaway_angle_min_deg / max_deg | 15 / 90 | Inclusive hard commanded raw-motor reference angle window; max must be at least min. |
+
+#### Progressive safe activation
+
+First confirm the selected PID/wheel controller with policy disabled. Then add
+only the step schedule:
+
+    static_breakaway_policy: steps
+    static_breakaway_steps_outward_nm: [40.0, 60.0, 80.0]
+    static_breakaway_steps_inward_nm: [40.0, 60.0, 80.0]
+    static_breakaway_step_1_s: 0.10
+    static_breakaway_step_2_s: 0.30
+    static_breakaway_angle_mode: none
+    static_breakaway_angle_min_deg: 15.0
+    static_breakaway_angle_max_deg: 90.0
+
+After measuring a safe plateau range, change one feature at a time: asymmetric
+schedule, error hysteresis, velocity source/release speed, soft velocity fade, then
+angle shaping. Do not change PID or wheel mode in the same campaign. The trace
+records commanded hip FF, raw/filtered/selected motor velocity, breakaway FF,
+dwell time, and release-latch state; the manifest records policy, schedules,
+velocity source, steps, angle mode, and error thresholds.
+
+### Hip FF direction and limit
+
+The near-zero policy is the entire hip FF command. It is issued only in A→B
+and B→A motion and is zero in startup, holds, recovery, completion, and abort.
+For each hip, the runner uses the raw-motor tracking direction:
 
 ```text
-1. Hold state A for start_zero_hold_s.
-2. Move smoothly through static_release_fraction × D over static_release_ramp_s.
-3. Move through the remaining (1 - static_release_fraction) × D at hip_speed_rad_s.
-4. Hold B, then return from B to A at hip_speed_rad_s.
+e = commanded_motor_position − measured_motor_position
 ```
 
-With the baseline values `A=0°`, `B=45°`, `static_release_fraction=0.15`, and
-`static_release_ramp_s=1.0`, the first 6.75° is a smooth one-second breakaway
-test. The remaining 38.25° is the dynamic outward move. The return 45° is a
-separate dynamic inward/raising measurement; it does not reuse the static
-release ramp.
+If `abs(e) < 0.01 rad`, FF is zero. Otherwise `sign(e)` is the corrective
+torque direction. That same error, mapped through the module reference sign
+`s` (`−1` for A/B, `+1` for C/D), selects the physical schedule: outward means
+`e × s > 0`, otherwise inward. The runner selects the corresponding schedule,
+then applies the equation above. Thus positive raw error is inward for a front
+module and outward for a rear module; negative raw error reverses those labels.
 
-The static release uses a smoothstep position ramp: it starts and ends with
-zero commanded velocity, avoiding an artificial velocity step. PID remains
-active throughout. During this phase only,
-`hip_ff_static_outward_direct` is used for outward movement (or
-`hip_ff_static_inward_direct` if an inward static-release strategy is later
-introduced). Dynamic movement uses `hip_ff_outward_direct` or
-`hip_ff_inward_direct` instead.
-
-To disable static release deliberately, set **both**
-`static_release_fraction: 0.0` and `static_release_ramp_s: 0.0`; the runner
-then begins the dynamic A→B move immediately after the state-A hold. Otherwise
-keep the fraction strictly between `0` and `1` and the ramp duration positive.
-Use a small fraction such as `0.10–0.20` so it characterizes breakaway without
-turning the whole stroke into a quasi-static test. Change one of fraction, ramp
-duration, PID, or static FF at a time. Compare static-release tracking
-error/torque with the following dynamic segment; do not average them into one
-undifferentiated score.
-
-### Hip feedforward
-
-| Parameter | Type / default | Exact effect |
-| --- | --- | --- |
-| `hip_ff_outward_direct` | direct command / `0` | Magnitude added during dynamic motion whose planned direction is outward/lowering. Sign is selected from planned front/rear movement. |
-| `hip_ff_inward_direct` | direct command / `0` | Magnitude added during dynamic inward/raising movement. It may differ from outward FF. |
-| `hip_ff_static_outward_direct` | direct command / `0` | Magnitude used only during the outward static-release ramp. |
-| `hip_ff_static_inward_direct` | direct command / `0` | Magnitude used during an inward static-release ramp; current two-state baseline only has an outward initial static-release segment. |
-| `max_abs_hip_ff_torque_nm` | direct-command clamp / `200` | Absolute clamp applied after FF direction selection. It is independent of the broader hip safety torque limit. |
+`max_abs_hip_ff_torque_nm` (default `200`) is the direct-command absolute clamp
+on this result. It is independent of the broader measured hip-torque safety
+limit. A positive schedule value assists the instantaneous tracking error; a
+negative value opposes it. This calculation never uses `position_diff`.
 
 ### Safety and observability
 
 | Parameter | Type / default | Exact effect |
 | --- | --- | --- |
 | `max_state_age_s` | seconds / `0.10` | Maximum acceptable age of `/motor/state`. A stale state rests all motors and aborts. |
-| `max_abs_hip_error_rad` | radians / `0.35` | Largest allowed measured-motor-minus-commanded-motor error. A breach aborts. It is deliberately not based on reconstructed actual hip angle in strategy 1.2.1. |
+| `max_abs_hip_error_rad` | radians / `0.35` | Largest allowed measured-motor-minus-commanded-motor error. A breach aborts. It is deliberately not based on reconstructed actual hip angle in strategy 1.5.2. |
 | `max_abs_hip_torque_nm` | feedback units / `400` | Largest allowed absolute hip torque feedback value. A breach aborts. Confirm feedback units on hardware before changing it. |
 
 The runner logs phase changes to the terminal and `launch.log`: startup move,
-state-A hold, static release, move to B, hold at B, return to A, recovery
-rest, recovery move, complete, or aborted. `command_state_trace.csv` records
+state-A hold, move to B, hold at B, return to A, recovery rest, recovery move,
+complete, or aborted. `command_state_trace.csv` records
 the controller pair `commanded_motor_rad`/`motor_position_rad`, alongside
 `position_diff_rad` and the observation-only reconstruction
 `actual_hip_angle_rad = motor_position + position_diff`.
@@ -242,7 +503,7 @@ Dry run/default preview:
 ros2 launch kilin_hip_characterization characterization.launch.py
 ```
 
-For a real run, first copy and review a profile and create the run directory. Then explicitly provide `armed:=true`, `command_topic:=/motor/command`, and `run_dir:=...`. This package must be the only command authority for the test. In strategy 1.2.1, `speed_ik` and `torque_assist` are published only during moving hip phases; hubs are rest otherwise.
+For a real run, first copy and review a profile and create the run directory. Then explicitly provide `armed:=true`, `command_topic:=/motor/command`, and `run_dir:=...`. In strategy 1.5.2, `speed_ik` and `torque_assist` are published only during moving hip phases; hubs are rest otherwise.
 
 ## Offline analysis
 

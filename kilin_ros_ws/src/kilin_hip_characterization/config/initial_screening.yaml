@@ -7,7 +7,7 @@ kilin_hip_characterization:
     state_topic: /motor/state
     run_dir: ""
     strategy_name: phase_a_two_state_baseline
-    strategy_version: 1.2.1
+    strategy_version: 1.5.2
     repetitions: 3
     active_modules: [A, B]
     motion_mode: two_state_cycle
@@ -16,19 +16,43 @@ kilin_hip_characterization:
     startup_state_tolerance_deg: 3.0
     hip_speed_rad_s: 0.1
     start_zero_hold_s: 2.0
-    static_release_ramp_s: 1.0
-    static_release_fraction: 0.15
     segment_hold_s: 1.0
     final_zero_hold_s: 3.0
     fallback_segment_s: 2.0
     kp: 360.0
     ki: 0.0
     kd: 5.0
-    hip_ff_outward_direct: 0.0
-    hip_ff_inward_direct: 0.0
-    hip_ff_static_outward_direct: 0.0
-    hip_ff_static_inward_direct: 0.0
     max_abs_hip_ff_torque_nm: 200.0
+    # Disabled by default.  When enabled, this assist is evaluated during the
+    # normal A-to-B and B-to-A moves only; it does not create a separate phase.
+    static_breakaway_policy: disabled
+    static_breakaway_steps_outward_nm: [0.0, 0.0, 0.0]
+    static_breakaway_steps_inward_nm: [0.0, 0.0, 0.0]
+    static_breakaway_step_1_s: 0.10
+    static_breakaway_step_2_s: 0.30
+    static_breakaway_exp_start_outward_nm: 0.0
+    static_breakaway_exp_peak_outward_nm: 0.0
+    static_breakaway_exp_start_inward_nm: 0.0
+    static_breakaway_exp_peak_inward_nm: 0.0
+    static_breakaway_exp_tau_s: 0.20
+    static_breakaway_error_enable_rad: 0.02
+    static_breakaway_error_full_rad: 0.05
+    static_breakaway_error_disable_rad: 0.01
+    static_breakaway_dwell_speed_rad_s: 0.03
+    static_breakaway_release_speed_rad_s: 0.10
+    static_breakaway_velocity_fade_rad_s: 0.05
+    static_breakaway_velocity_fade_power: 2.0
+    static_breakaway_velocity_filter_alpha: 0.20
+    # raw uses /motor/state velocity directly. Use filtered explicitly when
+    # low-pass velocity is preferred.
+    static_breakaway_velocity_source: raw
+    static_breakaway_angle_mode: none
+    static_breakaway_angle_blend_outward: 0.0
+    static_breakaway_angle_blend_inward: 0.0
+    # Hard inclusive motor-reference angle window for the optional policy.
+    # At the disabled default this has no effect.
+    static_breakaway_angle_min_deg: 15.0
+    static_breakaway_angle_max_deg: 90.0
     ff_motion_min_rate_rad_s: 0.03
     ff_error_enable_rad: 0.010
     ff_error_disable_rad: 0.004

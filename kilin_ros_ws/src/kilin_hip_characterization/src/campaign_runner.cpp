@@ -20,7 +20,7 @@ constexpr double kDegToRad = M_PI / 180.0;
 constexpr double kRadSToRpm10 = 60.0 * 10.0 / (2.0 * M_PI);
 constexpr std::array<const char *, 4> kModuleNames{"A", "B", "C", "D"};
 
-enum class Phase { kWaitForState, kStartupMove, kStartHold, kStaticRelease, kMoveToB,
+enum class Phase { kWaitForState, kStartupMove, kStartHold, kMoveToB,
                    kHoldAtB, kMoveToA, kRecoveryRest, kRecoveryMove,
                    kComplete, kAborted };
 
@@ -29,7 +29,6 @@ const char *phaseName(Phase phase) {
     case Phase::kWaitForState: return "waiting_for_state";
     case Phase::kStartupMove: return "startup_move_to_state_a";
     case Phase::kStartHold: return "state_a_hold";
-    case Phase::kStaticRelease: return "static_release";
     case Phase::kMoveToB: return "move_to_state_b";
     case Phase::kHoldAtB: return "state_b_hold";
     case Phase::kMoveToA: return "return_to_state_a";
@@ -49,7 +48,7 @@ class CampaignRunner final : public rclcpp::Node {
     state_topic_ = declare_parameter<std::string>("state_topic", "/motor/state");
     run_dir_ = declare_parameter<std::string>("run_dir", "");
     strategy_name_ = declare_parameter<std::string>("strategy_name", "phase_a_two_state_baseline");
-    strategy_version_ = declare_parameter<std::string>("strategy_version", "1.2.1");
+    strategy_version_ = declare_parameter<std::string>("strategy_version", "1.5.2");
     active_modules_ = declare_parameter<std::vector<std::string>>("active_modules", {"A", "B"});
     repetitions_ = declare_parameter<int>("repetitions", 3);
     state_a_deg_ = declare_parameter<double>("state_a_deg", 0.0);
@@ -62,14 +61,32 @@ class CampaignRunner final : public rclcpp::Node {
     kp_ = declare_parameter<double>("kp", 360.0);
     ki_ = declare_parameter<double>("ki", 0.0);
     kd_ = declare_parameter<double>("kd", 5.0);
-    ff_outward_ = declare_parameter<double>("hip_ff_outward_direct", 0.0);
-    ff_inward_ = declare_parameter<double>("hip_ff_inward_direct", 0.0);
-    ff_static_outward_ = declare_parameter<double>("hip_ff_static_outward_direct", 0.0);
-    ff_static_inward_ = declare_parameter<double>("hip_ff_static_inward_direct", 0.0);
     max_ff_ = declare_parameter<double>("max_abs_hip_ff_torque_nm", 200.0);
+    static_breakaway_policy_ = declare_parameter<std::string>("static_breakaway_policy", "disabled");
+    static_breakaway_steps_outward_ = declare_parameter<std::vector<double>>("static_breakaway_steps_outward_nm", {0.0, 0.0, 0.0});
+    static_breakaway_steps_inward_ = declare_parameter<std::vector<double>>("static_breakaway_steps_inward_nm", {0.0, 0.0, 0.0});
+    static_breakaway_step_1_s_ = declare_parameter<double>("static_breakaway_step_1_s", 0.10);
+    static_breakaway_step_2_s_ = declare_parameter<double>("static_breakaway_step_2_s", 0.30);
+    static_breakaway_exp_start_outward_ = declare_parameter<double>("static_breakaway_exp_start_outward_nm", 0.0);
+    static_breakaway_exp_peak_outward_ = declare_parameter<double>("static_breakaway_exp_peak_outward_nm", 0.0);
+    static_breakaway_exp_start_inward_ = declare_parameter<double>("static_breakaway_exp_start_inward_nm", 0.0);
+    static_breakaway_exp_peak_inward_ = declare_parameter<double>("static_breakaway_exp_peak_inward_nm", 0.0);
+    static_breakaway_exp_tau_s_ = declare_parameter<double>("static_breakaway_exp_tau_s", 0.20);
+    static_breakaway_error_enable_rad_ = declare_parameter<double>("static_breakaway_error_enable_rad", 0.02);
+    static_breakaway_error_full_rad_ = declare_parameter<double>("static_breakaway_error_full_rad", 0.05);
+    static_breakaway_error_disable_rad_ = declare_parameter<double>("static_breakaway_error_disable_rad", 0.01);
+    static_breakaway_dwell_speed_rad_s_ = declare_parameter<double>("static_breakaway_dwell_speed_rad_s", 0.03);
+    static_breakaway_release_speed_rad_s_ = declare_parameter<double>("static_breakaway_release_speed_rad_s", 0.10);
+    static_breakaway_velocity_fade_rad_s_ = declare_parameter<double>("static_breakaway_velocity_fade_rad_s", 0.05);
+    static_breakaway_velocity_fade_power_ = declare_parameter<double>("static_breakaway_velocity_fade_power", 2.0);
+    static_breakaway_velocity_filter_alpha_ = declare_parameter<double>("static_breakaway_velocity_filter_alpha", 0.20);
+    static_breakaway_velocity_source_ = declare_parameter<std::string>("static_breakaway_velocity_source", "raw");
+    static_breakaway_angle_mode_ = declare_parameter<std::string>("static_breakaway_angle_mode", "none");
+    static_breakaway_angle_blend_outward_ = declare_parameter<double>("static_breakaway_angle_blend_outward", 0.0);
+    static_breakaway_angle_blend_inward_ = declare_parameter<double>("static_breakaway_angle_blend_inward", 0.0);
+    static_breakaway_angle_min_deg_ = declare_parameter<double>("static_breakaway_angle_min_deg", 15.0);
+    static_breakaway_angle_max_deg_ = declare_parameter<double>("static_breakaway_angle_max_deg", 90.0);
     start_hold_s_ = declare_parameter<double>("start_zero_hold_s", 2.0);
-    static_release_s_ = declare_parameter<double>("static_release_ramp_s", 1.0);
-    static_release_fraction_ = declare_parameter<double>("static_release_fraction", 0.15);
     segment_hold_s_ = declare_parameter<double>("segment_hold_s", 1.0);
     max_state_age_s_ = declare_parameter<double>("max_state_age_s", 0.10);
     max_error_rad_ = declare_parameter<double>("max_abs_hip_error_rad", 0.35);
@@ -83,16 +100,31 @@ class CampaignRunner final : public rclcpp::Node {
     wheel_rate_deadband_rad_s_ = declare_parameter<double>("wheel_rate_deadband_rad_s", 0.02);
 
     if (armed_ && run_dir_.empty()) throw std::runtime_error("armed run requires run_dir");
-    const bool static_release_disabled = static_release_s_ == 0.0 && static_release_fraction_ == 0.0;
-    const bool static_release_enabled = static_release_s_ > 0.0 && static_release_fraction_ > 0.0 && static_release_fraction_ < 1.0;
     if (wheel_mode_ == "speed") wheel_mode_ = "speed_ik";
     if (wheel_mode_ == "torque") wheel_mode_ = "torque_assist";
     const bool known_wheel_mode = wheel_mode_ == "rest" || wheel_mode_ == "speed_ik" || wheel_mode_ == "torque_assist";
+    const bool known_breakaway_policy = static_breakaway_policy_ == "disabled" ||
+        static_breakaway_policy_ == "steps" || static_breakaway_policy_ == "exponential";
+    const bool known_angle_mode = static_breakaway_angle_mode_ == "none" ||
+        static_breakaway_angle_mode_ == "sine";
+    const bool known_velocity_source = static_breakaway_velocity_source_ == "filtered" ||
+        static_breakaway_velocity_source_ == "raw";
     if (repetitions_ < 1 || startup_speed_ <= 0.0 || recovery_speed_ <= 0.0 || hip_speed_ <= 0.0 ||
-        (!static_release_disabled && !static_release_enabled) || !known_wheel_mode ||
+        !known_wheel_mode ||
         max_wheel_torque_ < 0.0 || hip_to_wheel_m_ <= 0.0 || wheel_radius_m_ <= 0.0 ||
-        wheel_rate_deadband_rad_s_ < 0.0) {
-      throw std::runtime_error("invalid trajectory, wheel-mode, or wheel-assist setting");
+        wheel_rate_deadband_rad_s_ < 0.0 || !known_breakaway_policy || !known_angle_mode || !known_velocity_source ||
+        static_breakaway_steps_outward_.size() != 3 || static_breakaway_steps_inward_.size() != 3 ||
+        static_breakaway_step_1_s_ < 0.0 || static_breakaway_step_2_s_ < static_breakaway_step_1_s_ ||
+        static_breakaway_exp_tau_s_ <= 0.0 || static_breakaway_error_disable_rad_ < 0.0 ||
+        static_breakaway_error_enable_rad_ < static_breakaway_error_disable_rad_ ||
+        static_breakaway_error_full_rad_ < static_breakaway_error_enable_rad_ ||
+        static_breakaway_dwell_speed_rad_s_ < 0.0 || static_breakaway_release_speed_rad_s_ < 0.0 ||
+        static_breakaway_velocity_fade_rad_s_ < 0.0 || static_breakaway_velocity_fade_power_ <= 0.0 ||
+        static_breakaway_velocity_filter_alpha_ <= 0.0 || static_breakaway_velocity_filter_alpha_ > 1.0 ||
+        static_breakaway_angle_blend_outward_ < 0.0 || static_breakaway_angle_blend_outward_ > 1.0 ||
+        static_breakaway_angle_blend_inward_ < 0.0 || static_breakaway_angle_blend_inward_ > 1.0 ||
+        static_breakaway_angle_min_deg_ < 0.0 || static_breakaway_angle_max_deg_ < static_breakaway_angle_min_deg_) {
+      throw std::runtime_error("invalid trajectory, wheel-mode, or near-zero-breakaway setting");
     }
     for (const auto &name : active_modules_) {
       if (std::find(kModuleNames.begin(), kModuleNames.end(), name) == kModuleNames.end()) throw std::runtime_error("unknown active module");
@@ -104,7 +136,14 @@ class CampaignRunner final : public rclcpp::Node {
   }
 
  private:
-  struct HipState { double motor{NAN}; double diff{NAN}; double torque{NAN}; int error{0}; };
+  struct HipState { double motor{NAN}; double diff{NAN}; double velocity{NAN}; double torque{NAN}; int error{0}; };
+  struct BreakawayState {
+    double dwell_s{0.0};
+    double last_update_s{0.0};
+    int direction_sign{0};
+    bool error_enabled{false};
+    bool released{false};
+  };
 
   bool active(size_t i) const { return std::find(active_modules_.begin(), active_modules_.end(), kModuleNames[i]) != active_modules_.end(); }
   double actual(size_t i) const { return hips_[i].motor + hips_[i].diff; }
@@ -119,7 +158,17 @@ class CampaignRunner final : public rclcpp::Node {
 
   void onState(const kilin_msgs::msg::MotorStateStamped::SharedPtr message) {
     const std::array<kilin_msgs::msg::LegState, 4> legs{message->module_a, message->module_b, message->module_c, message->module_d};
-    for (size_t i = 0; i < 4; ++i) hips_[i] = {legs[i].hip.position, legs[i].hip.position_diff, legs[i].hip.torque, legs[i].hip.error_code};
+    for (size_t i = 0; i < 4; ++i) {
+      hips_[i] = {legs[i].hip.position, legs[i].hip.position_diff, legs[i].hip.velocity, legs[i].hip.torque, legs[i].hip.error_code};
+      if (!std::isfinite(hips_[i].velocity)) {
+        filtered_hip_velocity_[i] = 0.0;
+      } else if (!std::isfinite(filtered_hip_velocity_[i])) {
+        filtered_hip_velocity_[i] = hips_[i].velocity;
+      } else {
+        filtered_hip_velocity_[i] = static_breakaway_velocity_filter_alpha_ * hips_[i].velocity +
+            (1.0 - static_breakaway_velocity_filter_alpha_) * filtered_hip_velocity_[i];
+      }
+    }
     last_state_ = now();
     have_state_ = true;
   }
@@ -139,6 +188,9 @@ class CampaignRunner final : public rclcpp::Node {
   void setPhase(Phase next, const std::string &detail) {
     phase_ = next;
     phase_start_ = now();
+    if (next == Phase::kMoveToB || next == Phase::kMoveToA) {
+      for (auto &state : breakaway_) state = BreakawayState{};
+    }
     RCLCPP_INFO(get_logger(), "Phase %s: %s", phaseName(next), detail.c_str());
   }
 
@@ -180,7 +232,7 @@ class CampaignRunner final : public rclcpp::Node {
   }
 
   bool wheelMotionPhase() const {
-    return phase_ == Phase::kStaticRelease || phase_ == Phase::kMoveToB || phase_ == Phase::kMoveToA;
+    return phase_ == Phase::kMoveToB || phase_ == Phase::kMoveToA;
   }
 
   double wheelRateRadS(double hip_rate_rad_s, double commanded_hip_rad) const {
@@ -231,7 +283,15 @@ class CampaignRunner final : public rclcpp::Node {
       // not part of this low-level position-control loop.
       legs[i].hip.position = target[i];
       legs[i].hip.kp = kp_; legs[i].hip.ki = ki_; legs[i].hip.kd = kd_;
-      legs[i].hip.torque = allow_ff ? feedforward(i, target[i] - hips_[i].motor) : 0.0;
+      raw_hip_velocity_trace_[i] = hips_[i].velocity;
+      breakaway_velocity_used_trace_[i] = breakawayVelocity(i);
+      commanded_hip_ff_[i] = allow_ff ? feedforward(i, target[i] - hips_[i].motor) : 0.0;
+      if (!allow_ff) {
+        commanded_static_breakaway_ff_[i] = 0.0;
+        breakaway_dwell_trace_[i] = 0.0;
+        breakaway_released_trace_[i] = 0;
+      }
+      legs[i].hip.torque = commanded_hip_ff_[i];
       legs[i].steering.motor_mode = kPosition;
       legs[i].steering.position = 0.0;
       commandHub(legs[i], i, hip_rate, target[i]);
@@ -243,13 +303,109 @@ class CampaignRunner final : public rclcpp::Node {
     writeTrace();
   }
 
-  double feedforward(size_t i, double direction) const {
-    if (!active(i) || std::abs(direction) < 0.01) return 0.0;
-    const bool outward = direction * sign(i) > 0.0;
-    const double magnitude = phase_ == Phase::kStaticRelease
-        ? (outward ? ff_static_outward_ : ff_static_inward_)
-        : (outward ? ff_outward_ : ff_inward_);
-    return std::clamp(std::copysign(magnitude, direction), -max_ff_, max_ff_);
+  double breakawayAngleFactor(size_t i, bool outward) const {
+    if (static_breakaway_angle_mode_ == "none") return 1.0;
+    const double angle = std::abs(commanded_[i]);
+    const double shape = std::max(0.0, std::sin(angle));
+    const double blend = outward ? static_breakaway_angle_blend_outward_ : static_breakaway_angle_blend_inward_;
+    return (1.0 - blend) + blend * shape;
+  }
+
+  bool breakawayAngleInRange(size_t i) const {
+    const double angle_deg = std::abs(commanded_[i]) / kDegToRad;
+    return angle_deg >= static_breakaway_angle_min_deg_ && angle_deg <= static_breakaway_angle_max_deg_;
+  }
+
+  double breakawayBaseAmplitude(bool outward, double dwell_s) const {
+    if (static_breakaway_policy_ == "steps") {
+      const auto &steps = outward ? static_breakaway_steps_outward_ : static_breakaway_steps_inward_;
+      if (dwell_s < static_breakaway_step_1_s_) return steps[0];
+      if (dwell_s < static_breakaway_step_2_s_) return steps[1];
+      return steps[2];
+    }
+    const double start = outward ? static_breakaway_exp_start_outward_ : static_breakaway_exp_start_inward_;
+    const double peak = outward ? static_breakaway_exp_peak_outward_ : static_breakaway_exp_peak_inward_;
+    return start + (peak - start) * (1.0 - std::exp(-dwell_s / static_breakaway_exp_tau_s_));
+  }
+
+  double breakawayVelocity(size_t i) const {
+    const double selected = static_breakaway_velocity_source_ == "raw"
+        ? hips_[i].velocity : filtered_hip_velocity_[i];
+    return std::isfinite(selected) ? selected : 0.0;
+  }
+
+  double breakawayVelocityGate(size_t i) const {
+    if (static_breakaway_velocity_fade_rad_s_ == 0.0) return 1.0;
+    const double ratio = std::abs(breakawayVelocity(i)) / static_breakaway_velocity_fade_rad_s_;
+    return std::exp(-std::pow(ratio, static_breakaway_velocity_fade_power_));
+  }
+
+  double staticBreakawayFF(size_t i, double error, bool outward) {
+    commanded_static_breakaway_ff_[i] = 0.0;
+    breakaway_dwell_trace_[i] = 0.0;
+    breakaway_released_trace_[i] = 0;
+    if (static_breakaway_policy_ == "disabled") return NAN;
+    if (!breakawayAngleInRange(i)) return 0.0;
+
+    auto &state = breakaway_[i];
+    const double time_s = now().seconds();
+    const double dt_s = state.last_update_s == 0.0 ? 0.0 : std::clamp(time_s - state.last_update_s, 0.0, 0.05);
+    state.last_update_s = time_s;
+    const int direction_sign = error >= 0.0 ? 1 : -1;
+    if (state.direction_sign != 0 && state.direction_sign != direction_sign) {
+      state = BreakawayState{};
+      state.last_update_s = time_s;
+    }
+    state.direction_sign = direction_sign;
+
+    const double error_abs = std::abs(error);
+    if (!state.error_enabled && error_abs >= static_breakaway_error_enable_rad_) state.error_enabled = true;
+    if (state.error_enabled && error_abs <= static_breakaway_error_disable_rad_) state.error_enabled = false;
+    if (!state.error_enabled) {
+      state.dwell_s = 0.0;
+      return 0.0;
+    }
+
+    const double velocity_abs = std::abs(breakawayVelocity(i));
+    if (static_breakaway_release_speed_rad_s_ > 0.0 && velocity_abs >= static_breakaway_release_speed_rad_s_) {
+      state.released = true;
+    }
+    if (state.released) {
+      breakaway_released_trace_[i] = 1;
+      return 0.0;
+    }
+    if (static_breakaway_dwell_speed_rad_s_ > 0.0 && velocity_abs > static_breakaway_dwell_speed_rad_s_) {
+      state.dwell_s = 0.0;
+      return 0.0;
+    }
+    state.dwell_s += dt_s;
+
+    const double error_gate = static_breakaway_error_full_rad_ == static_breakaway_error_enable_rad_
+        ? 1.0
+        : smooth((error_abs - static_breakaway_error_enable_rad_) /
+                 (static_breakaway_error_full_rad_ - static_breakaway_error_enable_rad_));
+    const double amplitude = breakawayBaseAmplitude(outward, state.dwell_s) *
+        error_gate * breakawayVelocityGate(i) * breakawayAngleFactor(i, outward);
+    const double command = std::clamp(std::copysign(1.0, error) * amplitude, -max_ff_, max_ff_);
+    commanded_static_breakaway_ff_[i] = command;
+    breakaway_dwell_trace_[i] = state.dwell_s;
+    return command;
+  }
+
+  double feedforward(size_t i, double error) {
+    commanded_static_breakaway_ff_[i] = 0.0;
+    breakaway_dwell_trace_[i] = 0.0;
+    breakaway_released_trace_[i] = 0;
+    if (!active(i) || std::abs(error) < 0.01) return 0.0;
+    // The raw error sign sets corrective torque polarity. The module convention
+    // maps that same error into the physical outward/inward label: identical
+    // error signs mean opposite labels for front and rear modules.
+    const bool outward = error * sign(i) > 0.0;
+    if (wheelMotionPhase()) {
+      const double breakaway = staticBreakawayFF(i, error, outward);
+      if (std::isfinite(breakaway)) return breakaway;
+    }
+    return 0.0;
   }
 
   std::array<double, 4> interpolated(const std::array<double, 4> &from, const std::array<double, 4> &to, double fraction) const {
@@ -275,18 +431,11 @@ class CampaignRunner final : public rclcpp::Node {
         break;
       case Phase::kStartHold:
         commandPosition(a, false);
-        if (elapsed() >= start_hold_s_) {
-          if (static_release_fraction_ == 0.0) setPhase(Phase::kMoveToB, "static release disabled; beginning dynamic move to state B");
-          else setPhase(Phase::kStaticRelease, "static-release ramp for breakaway friction");
-        }
-        break;
-      case Phase::kStaticRelease:
-        commandPosition(interpolated(a, b, static_release_fraction_ * smooth(elapsed() / static_release_s_)), true);
-        if (elapsed() >= static_release_s_) setPhase(Phase::kMoveToB, "constant-speed dynamic move to state B");
+        if (elapsed() >= start_hold_s_) setPhase(Phase::kMoveToB, "beginning dynamic move to state B");
         break;
       case Phase::kMoveToB:
-        commandPosition(interpolated(a, b, static_release_fraction_ + (1.0 - static_release_fraction_) * clamp01(elapsed() / ((1.0 - static_release_fraction_) * fullStrokeDuration()))), true);
-        if (elapsed() >= (1.0 - static_release_fraction_) * fullStrokeDuration()) setPhase(Phase::kHoldAtB, "state B reached");
+        commandPosition(interpolated(a, b, clamp01(elapsed() / fullStrokeDuration())), true);
+        if (elapsed() >= fullStrokeDuration()) setPhase(Phase::kHoldAtB, "state B reached");
         break;
       case Phase::kHoldAtB:
         commandPosition(b, false);
@@ -325,14 +474,72 @@ class CampaignRunner final : public rclcpp::Node {
   void complete() { publishRest(); setPhase(Phase::kComplete, "all repetitions and recovery complete"); RCLCPP_INFO(get_logger(), "Campaign complete."); rclcpp::shutdown(); }
   void stamp(kilin_msgs::msg::MotorCmdStamped &message) { const auto t = now(); message.header.seq = sequence_++; message.header.time.sec = static_cast<int32_t>(t.seconds()); message.header.time.nanosec = static_cast<uint32_t>(t.nanoseconds() % 1000000000LL); message.header.frame_id = "kilin_hip_characterization"; }
   void publishRest() { kilin_msgs::msg::MotorCmdStamped message; stamp(message); kilin_msgs::msg::LegCmd leg; leg.hip.motor_mode=kRest; leg.steering.motor_mode=kRest; leg.hub.motor_mode=kRest; message.module_a=leg;message.module_b=leg;message.module_c=leg;message.module_d=leg;publisher_->publish(message); }
-  void openEvidence() { if (run_dir_.empty()) return; fs::create_directories(run_dir_); trace_.open(fs::path(run_dir_) / "command_state_trace.csv"); trace_ << "time_s,phase,trial,module,commanded_motor_rad,motor_position_rad,position_diff_rad,actual_hip_angle_rad,hip_torque,hub_mode,commanded_hub_velocity_rpm10,commanded_hub_torque,error_code\n"; std::ofstream manifest(fs::path(run_dir_) / "trial_manifest.yaml"); manifest << "strategy_name: " << strategy_name_ << "\nstrategy_version: " << strategy_version_ << "\nangle_convention: actual_hip_angle_rad = motor_position + position_diff\ncontrol_angle_reference: motor_position (position_diff is measurement-only)\nwheel_mode: " << wheel_mode_ << "\nwheel_torque_outward_nm: " << wheel_torque_outward_ << "\nwheel_torque_inward_nm: " << wheel_torque_inward_ << "\nmax_abs_hub_torque_nm: " << max_wheel_torque_ << "\n"; }
-  void writeTrace() { if (!trace_) return; for (size_t i=0;i<4;++i) trace_ << now().seconds() << ',' << phaseName(phase_) << ',' << completed_repetitions_ + 1 << ',' << kModuleNames[i] << ',' << commanded_[i] << ',' << hips_[i].motor << ',' << hips_[i].diff << ',' << actual(i) << ',' << hips_[i].torque << ',' << commanded_hub_mode_[i] << ',' << commanded_hub_velocity_rpm10_[i] << ',' << commanded_hub_torque_[i] << ',' << hips_[i].error << '\n'; }
+  void openEvidence() {
+    if (run_dir_.empty()) return;
+    fs::create_directories(run_dir_);
+    trace_.open(fs::path(run_dir_) / "command_state_trace.csv");
+    trace_ << "time_s,phase,trial,module,commanded_motor_rad,motor_position_rad,position_diff_rad,actual_hip_angle_rad,hip_torque,commanded_hip_ff,raw_hip_velocity_rad_s,filtered_hip_velocity_rad_s,breakaway_velocity_used_rad_s,static_breakaway_ff,static_breakaway_dwell_s,static_breakaway_released,hub_mode,commanded_hub_velocity_rpm10,commanded_hub_torque,error_code\n";
+    std::ofstream manifest(fs::path(run_dir_) / "trial_manifest.yaml");
+    manifest << "strategy_name: " << strategy_name_ << "\nstrategy_version: " << strategy_version_
+             << "\nangle_convention: actual_hip_angle_rad = motor_position + position_diff"
+             << "\ncontrol_angle_reference: motor_position (position_diff is measurement-only)"
+             << "\nwheel_mode: " << wheel_mode_
+             << "\nwheel_torque_outward_nm: " << wheel_torque_outward_
+             << "\nwheel_torque_inward_nm: " << wheel_torque_inward_
+             << "\nmax_abs_hub_torque_nm: " << max_wheel_torque_
+             << "\nstatic_breakaway_policy: " << static_breakaway_policy_
+             << "\nstatic_breakaway_steps_outward_nm: [" << static_breakaway_steps_outward_[0] << ", " << static_breakaway_steps_outward_[1] << ", " << static_breakaway_steps_outward_[2] << "]"
+             << "\nstatic_breakaway_steps_inward_nm: [" << static_breakaway_steps_inward_[0] << ", " << static_breakaway_steps_inward_[1] << ", " << static_breakaway_steps_inward_[2] << "]"
+             << "\nstatic_breakaway_step_1_s: " << static_breakaway_step_1_s_
+             << "\nstatic_breakaway_step_2_s: " << static_breakaway_step_2_s_
+             << "\nstatic_breakaway_exp_start_outward_nm: " << static_breakaway_exp_start_outward_
+             << "\nstatic_breakaway_exp_peak_outward_nm: " << static_breakaway_exp_peak_outward_
+             << "\nstatic_breakaway_exp_start_inward_nm: " << static_breakaway_exp_start_inward_
+             << "\nstatic_breakaway_exp_peak_inward_nm: " << static_breakaway_exp_peak_inward_
+             << "\nstatic_breakaway_exp_tau_s: " << static_breakaway_exp_tau_s_
+             << "\nstatic_breakaway_angle_mode: " << static_breakaway_angle_mode_
+             << "\nstatic_breakaway_angle_blend_outward: " << static_breakaway_angle_blend_outward_
+             << "\nstatic_breakaway_angle_blend_inward: " << static_breakaway_angle_blend_inward_
+             << "\nstatic_breakaway_angle_min_deg: " << static_breakaway_angle_min_deg_
+             << "\nstatic_breakaway_angle_max_deg: " << static_breakaway_angle_max_deg_
+             << "\nstatic_breakaway_error_enable_rad: " << static_breakaway_error_enable_rad_
+             << "\nstatic_breakaway_error_full_rad: " << static_breakaway_error_full_rad_
+             << "\nstatic_breakaway_error_disable_rad: " << static_breakaway_error_disable_rad_
+             << "\nstatic_breakaway_dwell_speed_rad_s: " << static_breakaway_dwell_speed_rad_s_
+             << "\nstatic_breakaway_release_speed_rad_s: " << static_breakaway_release_speed_rad_s_
+             << "\nstatic_breakaway_velocity_fade_rad_s: " << static_breakaway_velocity_fade_rad_s_
+             << "\nstatic_breakaway_velocity_fade_power: " << static_breakaway_velocity_fade_power_
+             << "\nstatic_breakaway_velocity_filter_alpha: " << static_breakaway_velocity_filter_alpha_
+             << "\nstatic_breakaway_velocity_source: " << static_breakaway_velocity_source_
+             << "\n";
+  }
+  void writeTrace() {
+    if (!trace_) return;
+    for (size_t i = 0; i < 4; ++i) {
+      trace_ << now().seconds() << ',' << phaseName(phase_) << ',' << completed_repetitions_ + 1 << ','
+             << kModuleNames[i] << ',' << commanded_[i] << ',' << hips_[i].motor << ',' << hips_[i].diff
+             << ',' << actual(i) << ',' << hips_[i].torque << ',' << commanded_hip_ff_[i] << ','
+             << raw_hip_velocity_trace_[i] << ',' << filtered_hip_velocity_[i] << ','
+             << breakaway_velocity_used_trace_[i] << ',' << commanded_static_breakaway_ff_[i] << ','
+             << breakaway_dwell_trace_[i] << ',' << breakaway_released_trace_[i] << ','
+             << commanded_hub_mode_[i] << ',' << commanded_hub_velocity_rpm10_[i] << ','
+             << commanded_hub_torque_[i] << ',' << hips_[i].error << '\n';
+    }
+  }
 
   bool armed_{false}, have_state_{false}; int repetitions_{3}, completed_repetitions_{0}; uint32_t sequence_{0};
   std::string command_topic_, state_topic_, run_dir_, strategy_name_, strategy_version_; std::vector<std::string> active_modules_;
-  double state_a_deg_{0}, state_b_deg_{45}, startup_speed_{.1}, recovery_deg_{0}, recovery_speed_{.1}, recovery_rest_s_{1}, hip_speed_{.2}, kp_{360}, ki_{0}, kd_{5}, ff_outward_{0}, ff_inward_{0}, ff_static_outward_{0}, ff_static_inward_{0}, max_ff_{200}, start_hold_s_{2}, static_release_s_{1}, static_release_fraction_{.15}, segment_hold_s_{1}, max_state_age_s_{.1}, max_error_rad_{.35}, max_torque_{400}, wheel_torque_outward_{0}, wheel_torque_inward_{0}, max_wheel_torque_{20}, hip_to_wheel_m_{.260}, wheel_radius_m_{.051}, wheel_rate_deadband_rad_s_{.02};
-  std::string wheel_mode_;
-  std::array<HipState, 4> hips_{}; std::array<double, 4> commanded_{}, move_start_{}, previous_target_{}, commanded_hub_velocity_rpm10_{}, commanded_hub_torque_{}; std::array<int, 4> commanded_hub_mode_{}; Phase phase_{Phase::kWaitForState}; rclcpp::Time phase_start_{0,0,RCL_ROS_TIME}, last_state_{0,0,RCL_ROS_TIME}, previous_target_time_{0,0,RCL_ROS_TIME}; std::ofstream trace_;
+  double state_a_deg_{0}, state_b_deg_{45}, startup_speed_{.1}, recovery_deg_{0}, recovery_speed_{.1}, recovery_rest_s_{1}, hip_speed_{.2}, kp_{360}, ki_{0}, kd_{5}, max_ff_{200}, start_hold_s_{2}, segment_hold_s_{1}, max_state_age_s_{.1}, max_error_rad_{.35}, max_torque_{400}, wheel_torque_outward_{0}, wheel_torque_inward_{0}, max_wheel_torque_{20}, hip_to_wheel_m_{.260}, wheel_radius_m_{.051}, wheel_rate_deadband_rad_s_{.02};
+  double static_breakaway_step_1_s_{.10}, static_breakaway_step_2_s_{.30}, static_breakaway_exp_start_outward_{0}, static_breakaway_exp_peak_outward_{0}, static_breakaway_exp_start_inward_{0}, static_breakaway_exp_peak_inward_{0}, static_breakaway_exp_tau_s_{.20}, static_breakaway_error_enable_rad_{.02}, static_breakaway_error_full_rad_{.05}, static_breakaway_error_disable_rad_{.01}, static_breakaway_dwell_speed_rad_s_{.03}, static_breakaway_release_speed_rad_s_{.10}, static_breakaway_velocity_fade_rad_s_{.05}, static_breakaway_velocity_fade_power_{2}, static_breakaway_velocity_filter_alpha_{.20}, static_breakaway_angle_blend_outward_{0}, static_breakaway_angle_blend_inward_{0}, static_breakaway_angle_min_deg_{15}, static_breakaway_angle_max_deg_{90};
+  std::string wheel_mode_, static_breakaway_policy_, static_breakaway_angle_mode_, static_breakaway_velocity_source_;
+  std::vector<double> static_breakaway_steps_outward_, static_breakaway_steps_inward_;
+  std::array<HipState, 4> hips_{};
+  std::array<BreakawayState, 4> breakaway_{};
+  std::array<double, 4> commanded_{}, move_start_{}, previous_target_{}, commanded_hub_velocity_rpm10_{}, commanded_hub_torque_{}, commanded_hip_ff_{}, commanded_static_breakaway_ff_{}, raw_hip_velocity_trace_{}, filtered_hip_velocity_{}, breakaway_velocity_used_trace_{}, breakaway_dwell_trace_{};
+  std::array<int, 4> commanded_hub_mode_{}, breakaway_released_trace_{};
+  Phase phase_{Phase::kWaitForState};
+  rclcpp::Time phase_start_{0,0,RCL_ROS_TIME}, last_state_{0,0,RCL_ROS_TIME}, previous_target_time_{0,0,RCL_ROS_TIME};
+  std::ofstream trace_;
   rclcpp::Publisher<kilin_msgs::msg::MotorCmdStamped>::SharedPtr publisher_; rclcpp::Subscription<kilin_msgs::msg::MotorStateStamped>::SharedPtr subscriber_; rclcpp::TimerBase::SharedPtr timer_;
 };
 int main(int argc, char **argv) { rclcpp::init(argc, argv); rclcpp::spin(std::make_shared<CampaignRunner>()); rclcpp::shutdown(); return 0; }

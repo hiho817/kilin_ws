@@ -20,14 +20,15 @@ def main():
     groups = defaultdict(list)
     with args.trace.open(newline="") as handle:
         for row in csv.DictReader(handle):
-            # Dynamic phases only: static release (2), extend (3), hold (4), contract (5).
-            if int(row["phase"]) not in (2, 3, 4, 5):
+            # Current runner uses named phases; score the two trajectory moves
+            # only, not startup/hold/recovery.
+            if row["phase"] not in ("move_to_state_b", "return_to_state_a"):
                 continue
-            actual = float(row["hip_actual_rad"])
-            command = float(row["hip_cmd_actual_rad"])
+            actual = float(row["actual_hip_angle_rad"])
+            command = float(row["commanded_motor_rad"])
             if math.isfinite(actual) and math.isfinite(command):
                 groups[(row["trial"], row["module"], row["phase"])].append(
-                    (command - actual, float(row["hip_torque_nm"]), int(row["hip_error_code"])))
+                    (command - actual, float(row["hip_torque"]), int(row["error_code"])))
     with out.open("w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["trial", "module", "phase", "samples", "actual_error_rms_rad", "actual_error_bias_rad", "actual_error_peak_rad", "peak_motor_torque_nm", "fault_samples"])
