@@ -110,11 +110,15 @@ active throughout. During this phase only,
 introduced). Dynamic movement uses `hip_ff_outward_direct` or
 `hip_ff_inward_direct` instead.
 
-Keep `static_release_fraction` strictly between `0` and `1`; use a small value
-such as `0.10–0.20` so it characterizes breakaway without turning the whole
-stroke into a quasi-static test. Change one of fraction, ramp duration, PID, or
-static FF at a time. Compare static-release tracking error/torque with the
-following dynamic segment; do not average them into one undifferentiated score.
+To disable static release deliberately, set **both**
+`static_release_fraction: 0.0` and `static_release_ramp_s: 0.0`; the runner
+then begins the dynamic A→B move immediately after the state-A hold. Otherwise
+keep the fraction strictly between `0` and `1` and the ramp duration positive.
+Use a small fraction such as `0.10–0.20` so it characterizes breakaway without
+turning the whole stroke into a quasi-static test. Change one of fraction, ramp
+duration, PID, or static FF at a time. Compare static-release tracking
+error/torque with the following dynamic segment; do not average them into one
+undifferentiated score.
 
 ### Hip feedforward
 

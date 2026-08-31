@@ -75,7 +75,9 @@ class CampaignRunner final : public rclcpp::Node {
     max_torque_ = declare_parameter<double>("max_abs_hip_torque_nm", 400.0);
 
     if (armed_ && run_dir_.empty()) throw std::runtime_error("armed run requires run_dir");
-    if (repetitions_ < 1 || startup_speed_ <= 0.0 || recovery_speed_ <= 0.0 || hip_speed_ <= 0.0 || static_release_s_ <= 0.0 || static_release_fraction_ <= 0.0 || static_release_fraction_ >= 1.0) throw std::runtime_error("invalid repetitions, speed, or static-release settings");
+    const bool static_release_disabled = static_release_s_ == 0.0 && static_release_fraction_ == 0.0;
+    const bool static_release_enabled = static_release_s_ > 0.0 && static_release_fraction_ > 0.0 && static_release_fraction_ < 1.0;
+    if (repetitions_ < 1 || startup_speed_ <= 0.0 || recovery_speed_ <= 0.0 || hip_speed_ <= 0.0 || (!static_release_disabled && !static_release_enabled)) throw std::runtime_error("invalid repetitions, speed, or static-release settings");
     for (const auto &name : active_modules_) {
       if (std::find(kModuleNames.begin(), kModuleNames.end(), name) == kModuleNames.end()) throw std::runtime_error("unknown active module");
     }
@@ -206,7 +208,10 @@ class CampaignRunner final : public rclcpp::Node {
         break;
       case Phase::kStartHold:
         commandPosition(a, false);
-        if (elapsed() >= start_hold_s_) setPhase(Phase::kStaticRelease, "static-release ramp for breakaway friction");
+        if (elapsed() >= start_hold_s_) {
+          if (static_release_fraction_ == 0.0) setPhase(Phase::kMoveToB, "static release disabled; beginning dynamic move to state B");
+          else setPhase(Phase::kStaticRelease, "static-release ramp for breakaway friction");
+        }
         break;
       case Phase::kStaticRelease:
         commandPosition(interpolated(a, b, static_release_fraction_ * smooth(elapsed() / static_release_s_)), true);
