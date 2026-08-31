@@ -7,7 +7,7 @@ kilin_hip_characterization:
     state_topic: /motor/state
     run_dir: ""
     strategy_name: phase_a_two_state_baseline
-    strategy_version: 1.5.2
+    strategy_version: 1.7.0
     repetitions: 3
     active_modules: [A, B]
     motion_mode: two_state_cycle
@@ -40,8 +40,6 @@ kilin_hip_characterization:
     static_breakaway_error_disable_rad: 0.01
     static_breakaway_dwell_speed_rad_s: 0.03
     static_breakaway_release_speed_rad_s: 0.10
-    static_breakaway_velocity_fade_rad_s: 0.05
-    static_breakaway_velocity_fade_power: 2.0
     static_breakaway_velocity_filter_alpha: 0.20
     # raw uses /motor/state velocity directly. Use filtered explicitly when
     # low-pass velocity is preferred.

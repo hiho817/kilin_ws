@@ -8,7 +8,7 @@ One ROS 2 package for low-level hip-transmission characterization, PID and bound
 - Real actuation requires both `armed:=true` and an explicit real command topic.
 - It sends nothing until `/motor/state` is fresh, then captures current hip and hub feedback as its starting state.
 - New-recording convention is `actual_hip_angle_rad = motor_position + position_diff`.
-- Strategy **1.5.2** commands the raw motor-position reference directly. `position_diff` is not fed back into the position or FF loop.
+- Strategy **1.7.0** commands the raw motor-position reference directly. `position_diff` is not fed back into the position or FF loop.
 - `actual_hip_angle_rad` is still reconstructed and recorded for offline transmission/force analysis. Safety aborts on stale state, non-finite state, motor error code, configured hip-torque bound, or configured raw-motor tracking bound. Abort sends all motors to rest.
 
 The package does not modify `kilin_com_estimator`, the terrain planner, or FAST-LIO2.
@@ -38,7 +38,7 @@ control policy requires a new name/version before an experiment is run.
 
 ### Wheel modes
 
-Strategy **1.5.2** has one explicit `wheel_mode`, recorded in the run manifest
+Strategy **1.7.0** has one explicit `wheel_mode`, recorded in the run manifest
 and trace. Hubs are always `rest` during startup, both hold phases, recovery,
 completion, and abort. Wheel commands are active only during the normal A→B
 and B→A moves.
@@ -48,7 +48,7 @@ and B→A moves.
 | `rest` | Hub motor mode `rest`; no active velocity or torque command. | Baseline hip-only test. |
 | `speed_ik` (or alias `speed`) | Hub velocity is calculated live from the commanded hip trajectory at every control tick. | The wheel follows hip motion kinematically; it is never a fixed speed. The command field uses the established RPM-times-ten unit: `hub.velocity = wheel_rate_rad_s × 60 × 10 / (2π)`. |
 | `torque_assist` (or alias `torque`) | Hub torque magnitude is a fixed signed configuration value. The IK wheel rate chooses the reference direction. | Positive values assist `speed_ik`; negative values oppose it. The torque magnitude is **not** calculated from IK. Outward and inward values may differ and are clamped. |
-| `brake` / `position_hold` | Not implemented in 1.5.2. | A profile using either is rejected before commanding hardware. Position hold will require feedback-captured position before it is introduced. |
+| `brake` / `position_hold` | Not implemented in 1.7.0. | A profile using either is rejected before commanding hardware. Position hold will require feedback-captured position before it is introduced. |
 
 For `speed_ik`, IK supplies both the live wheel-rate magnitude and direction.
 For `torque_assist`, IK supplies **only the reference direction**; the signed
@@ -91,7 +91,7 @@ The master runner merges `kilin_hip_batch.defaults` with each test's
 | `run_dir` | string / empty | Evidence folder. Required for an armed direct controller invocation; the helpers set it automatically. |
 | `bag_topics` | string list / six base topics | Topics passed to `ros2 bag record` by `single_runner.py` or `batch_runner.py`. Place it in a direct profile's `ros__parameters`, or master `defaults`; a unit-test override may replace it. The helper removes it before passing the resolved profile to the C++ controller and saves the final list as `bag_topics.txt`. |
 | `strategy_name` | string | Human-readable control/analysis strategy name, recorded in the manifest. |
-| `strategy_version` | numeric string | Revision of that strategy, e.g. `1.5.2`, recorded in the manifest. Use `1.5.2` for this raw-motor, wheel-mode-capable controller; do not reuse `1.0.0` compensated-run profiles. |
+| `strategy_version` | numeric string | Revision of that strategy, e.g. `1.7.0`, recorded in the manifest. Use `1.7.0` for this raw-motor, wheel-mode-capable controller; do not reuse `1.0.0` compensated-run profiles. |
 
 ### Test selection and geometry
 
@@ -115,13 +115,13 @@ The master runner merges `kilin_hip_batch.defaults` with each test's
 | `segment_hold_s` | seconds / `1.0` | Position hold at state B before returning to A. |
 | `kp`, `ki`, `kd` | direct motor gains / `360,0,5` | Hip position-loop gains copied directly into every hip `MotorCmd`. Change only one candidate dimension at a time during PID screening. |
 
-### Near-zero breakaway policy (strategy 1.5.2)
+### Near-zero breakaway policy (strategy 1.7.0)
 
 This is the nonlinear worm-gear breakaway policy. It is disabled by default:
 
     static_breakaway_policy: disabled
 
-Strategy **1.5.2** has no directional gain parameters. Asymmetry comes only
+Strategy **1.7.0** has no directional gain parameters. Asymmetry comes only
 from the separately configured outward and inward schedules $S_d(t_d)$. With
 policy `disabled`, hip FF is zero. With policy enabled, this is the complete
 hip FF during normal A→B and B→A motion.
@@ -153,19 +153,17 @@ torque. There is no second fixed FF term.
 | $d$ | outward/inward | Physical label selected from error direction: outward when $e\,s_{\mathrm{module}}>0$; A/B use $s=-1$, C/D use $s=+1$. |
 | $t_d$ | `static_breakaway_dwell_s` | Per-hip runtime dwell timer [s]. This is a trace/manifest observable, not a YAML setting. It starts at zero when each A→B or B→A move begins and increases by the control-tick interval only while the error and velocity eligibility gates are satisfied. |
 | $v_s$ | `breakaway_velocity_used_rad_s` | Selected velocity used by the policy [rad/s]; raw by default, or filtered when configured. |
-| $e_{\mathrm{enable}}$ | `static_breakaway_error_enable_rad` | Error magnitude [rad] that enables the hysteretic error gate. |
-| $e_{\mathrm{full}}$ | `static_breakaway_error_full_rad` | Error magnitude [rad] at which the error gate reaches one. |
-| $e_{\mathrm{disable}}$ | `static_breakaway_error_disable_rad` | Error magnitude [rad] that disables the gate after it was enabled. |
-| $u$ | intermediate variable | Normalized error coordinate clipped to $[0,1]$. |
-| $G_e$ | `error_gate` | Error multiplier in $[0,1]$. |
-| $G_v$ | `velocity_gate` | Velocity-fade multiplier in $(0,1]$. |
+| $e_{\mathrm{enable}}$ | `static_breakaway_error_enable_rad` | Error magnitude [rad] that arms the hysteretic error state. |
+| $e_{\mathrm{full}}$ | `static_breakaway_error_full_rad` | Error magnitude [rad] at which the linear error gate reaches one. |
+| $e_{\mathrm{disable}}$ | `static_breakaway_error_disable_rad` | Error magnitude [rad] that disarms the error state. |
+| $G_e$ | `error_gate` | Linear error multiplier in $[0,1]$. |
+| $G_v$ | `velocity_gate` | Step velocity multiplier: zero or one. |
 | $G_q$ | `angle_factor` | Angle multiplier after the hard window check. |
 | $A_d$ | `time_amplitude` | Signed direction-dependent amplitude before the gates [direct motor-command units]. |
 | $S_d$ | `static_breakaway_steps_*` or `static_breakaway_exp_*` | Direction-dependent schedule [direct motor-command units]. |
 | $t_1,t_2$ | `static_breakaway_step_1_s`, `_step_2_s` | Step transition times [s]. |
 | $\tau$ | `static_breakaway_exp_tau_s` | Exponential schedule time constant [s]. |
-| $v_{\mathrm{fade}}$ | `static_breakaway_velocity_fade_rad_s` | Velocity-fade scale [rad/s]. |
-| $p$ | `static_breakaway_velocity_fade_power` | Positive velocity-fade exponent. |
+| $v_{\mathrm{gate}}$ | `static_breakaway_dwell_speed_rad_s` | Step velocity-gate threshold [rad/s]. |
 | $b_d$ | `static_breakaway_angle_blend_outward/inward` | Direction-dependent angle blend in $[0,1]$. |
 | $q_{\min},q_{\max}$ | `static_breakaway_angle_min_deg`, `_max_deg` | Inclusive commanded-angle limits [degrees]. |
 | $\operatorname{sgn}(\cdot)$ | implementation operation | Returns $+1$ or $-1$ from its argument; here it uses the sign of $e$, not the motion-direction classification. |
@@ -246,21 +244,32 @@ units. If the same motion has negative error, the result is approximately
 $-65.3$; it does not switch from outward to inward merely because the tracking
 error changed sign.
 
-The smooth error gate is $G_e=0$ until hysteresis enables, then
+The error eligibility arms when $|e|\ge e_{\mathrm{enable}}$ and remains armed
+until $|e|\le e_{\mathrm{disable}}$. Its output gate retains the 1.6.0 ramp
+range but uses a direct linear slope:
 
-$$G_e(|e|)=3u^2-2u^3,\qquad
-u=\operatorname{clip}_{[0,1]}
-\left(\frac{|e|-e_{\mathrm{enable}}}{e_{\mathrm{full}}-e_{\mathrm{enable}}}\right).$$
+$$
+G_e(|e|)=\operatorname{clip}_{[0,1]}
+\left(\frac{|e|-e_{\mathrm{enable}}}
+{e_{\mathrm{full}}-e_{\mathrm{enable}}}\right).
+$$
 
-Here $e_{\mathrm{enable}}$, $e_{\mathrm{full}}$, and the hysteresis release
-level are `static_breakaway_error_enable_rad`, `_full_rad`, and `_disable_rad`.
-When velocity fade is enabled,
+Thus `static_breakaway_error_enable_rad`, `_full_rad`, and `_disable_rad` all
+remain profile parameters. There is no $3u^2-2u^3$ shaping in strategy 1.7.0.
+The velocity gate is a step:
 
-$$G_v(|v_s|)=\exp\left[-\left(\frac{|v_s|}{v_{\mathrm{fade}}}\right)^p\right],$$
+$$
+G_v(|v_s|)=
+\begin{cases}
+1, & \texttt{static\_breakaway\_dwell\_speed\_rad\_s}=0\ \text{or}\ |v_s|\le v_{\mathrm{gate}},\\
+0, & |v_s|>v_{\mathrm{gate}}.
+\end{cases}
+$$
 
-using `static_breakaway_velocity_fade_rad_s` for $v_{\mathrm{fade}}$ and
-`static_breakaway_velocity_fade_power` for $p$; it is one when fade speed is
-zero. $G_q$ is the optional angle factor described below.
+Here $v_{\mathrm{gate}}$ is `static_breakaway_dwell_speed_rad_s`. A zero gate
+threshold disables this step gate. There is no exponential velocity fade or
+velocity-fade power in strategy 1.7.0. $G_q$ is the optional angle factor
+described below.
 
 The equation is evaluated only when the commanded raw-motor reference lies in
 the inclusive `static_breakaway_angle_min_deg` to `_max_deg` window. Otherwise
@@ -272,17 +281,19 @@ $\tau_{\mathrm{ff}}=0$.
 
 #### Gates, dwell, and release latch
 
-- Error hysteresis enables at static_breakaway_error_enable_rad, remains
-  eligible until error falls below static_breakaway_error_disable_rad, and
-  smoothly reaches full scale at static_breakaway_error_full_rad.
+- Error hysteresis arms at `static_breakaway_error_enable_rad` and remains
+  armed until error falls below `static_breakaway_error_disable_rad`. Between
+  `static_breakaway_error_enable_rad` and `_full_rad`, the output rises
+  linearly from zero to full scheduled amplitude; there is no cubic shaping.
 - A reversal of error sign clears dwell and the release latch. This prevents a
   previous breakaway pulse continuing after overshoot.
 - The hard inclusive angle window is checked first:
   `static_breakaway_angle_min_deg <= abs(commanded_motor_deg) <=
   static_breakaway_angle_max_deg`. Outside it, the added policy output is zero
   and dwell does not accumulate. Defaults are 15–90 degrees.
-- Dwell accumulates only below `static_breakaway_dwell_speed_rad_s`. A faster
-  measured speed clears it.
+- `static_breakaway_dwell_speed_rad_s` is the step velocity-gate threshold:
+  at or below it, $G_v=1$ and dwell can accumulate; above it, $G_v=0$, FF is
+  zero, and dwell is cleared. Set it to zero to disable the step gate.
 - `static_breakaway_dwell_s` is the resulting per-hip timer, not the speed
   threshold. It is reset at the start of each moving phase, when selected speed
   exceeds the dwell-speed threshold, or when the tracking-error direction
@@ -290,14 +301,11 @@ $\tau_{\mathrm{ff}}=0$.
   amplitude can be reconstructed offline.
 - Release speed latches policy output off for the remaining current movement
   phase. Set static_breakaway_release_speed_rad_s to zero to disable it.
-- A nonzero static_breakaway_velocity_fade_rad_s applies
-  exp(-(abs(v)/fade)^power), a soft reduction as motion begins. Set it to zero
-  to disable fading.
 
 Motor velocity comes from `/motor/state`. Set
 `static_breakaway_velocity_source: filtered` to use the low-pass value, where
 the latest-sample weight is `static_breakaway_velocity_filter_alpha`; set it to
-`raw` to use the message velocity directly for dwell, release, and fade.
+`raw` to use the message velocity directly for the step gate and release.
 `raw_hip_velocity_rad_s`, `filtered_hip_velocity_rad_s`, and
 `breakaway_velocity_used_rad_s` are all recorded, so the selected source can
 be verified after the run.
@@ -369,14 +377,12 @@ versus angle before assuming a gravity model.
 | static_breakaway_exp_peak_outward_nm / inward_nm | 0 | Signed asymptotic exponential amplitude. |
 | static_breakaway_exp_tau_s | 0.20 | Positive exponential time constant. |
 | static_breakaway_error_enable_rad | 0.02 | Error enabling breakaway eligibility. |
-| static_breakaway_error_full_rad | 0.05 | Error at which the smooth gate reaches one. |
+| static_breakaway_error_full_rad | 0.05 | Error at which the linear FF gate reaches full scheduled amplitude. It must be at least `static_breakaway_error_enable_rad`. |
 | static_breakaway_error_disable_rad | 0.01 | Error disabling the gate after enable. |
-| static_breakaway_dwell_speed_rad_s | 0.03 | Maximum speed accumulating dwell; zero disables this condition. |
+| static_breakaway_dwell_speed_rad_s | 0.03 | Step velocity-gate threshold. At or below it FF may be nonzero and dwell accumulates; above it FF is zero and dwell clears. Zero disables this gate. |
 | static_breakaway_release_speed_rad_s | 0.10 | Speed latching output off; zero disables latch. |
-| static_breakaway_velocity_fade_rad_s | 0.05 | Soft-fade speed; zero disables fade. |
-| static_breakaway_velocity_fade_power | 2 | Positive velocity-fade exponent. |
 | static_breakaway_velocity_filter_alpha | 0.20 | New motor-speed sample weight, in (0,1]. |
-| static_breakaway_velocity_source | raw | `raw` uses `/motor/state` velocity directly; `filtered` uses the low-pass value for dwell, release, and fade. |
+| static_breakaway_velocity_source | raw | `raw` uses `/motor/state` velocity directly; `filtered` uses the low-pass value for the step gate and release latch. |
 | static_breakaway_angle_mode | none | `none` or `sine`; sine uses $\sin(|q_{\mathrm{cmd}}|)$. |
 | static_breakaway_angle_blend_outward / inward | 0 | Direction-specific blend $b_d$ in $[0,1]$: zero gives no angle scaling, one gives full sine scaling. |
 | static_breakaway_angle_min_deg / max_deg | 15 / 90 | Inclusive hard commanded raw-motor reference angle window; max must be at least min. |
@@ -396,7 +402,7 @@ only the step schedule:
     static_breakaway_angle_max_deg: 90.0
 
 After measuring a safe plateau range, change one feature at a time: asymmetric
-schedule, error hysteresis, velocity source/release speed, soft velocity fade, then
+schedule, error hysteresis, step-gate/release thresholds, velocity source, then
 angle shaping. Do not change PID or wheel mode in the same campaign. The trace
 records commanded hip FF, raw/filtered/selected motor velocity, breakaway FF,
 dwell time, and release-latch state; the manifest records policy, schedules,
@@ -429,7 +435,7 @@ negative value opposes it. This calculation never uses `position_diff`.
 | Parameter | Type / default | Exact effect |
 | --- | --- | --- |
 | `max_state_age_s` | seconds / `0.10` | Maximum acceptable age of `/motor/state`. A stale state rests all motors and aborts. |
-| `max_abs_hip_error_rad` | radians / `0.35` | Largest allowed measured-motor-minus-commanded-motor error. A breach aborts. It is deliberately not based on reconstructed actual hip angle in strategy 1.5.2. |
+| `max_abs_hip_error_rad` | radians / `0.35` | Largest allowed measured-motor-minus-commanded-motor error. A breach aborts. It is deliberately not based on reconstructed actual hip angle in strategy 1.7.0. |
 | `max_abs_hip_torque_nm` | feedback units / `400` | Largest allowed absolute hip torque feedback value. A breach aborts. Confirm feedback units on hardware before changing it. |
 
 The runner logs phase changes to the terminal and `launch.log`: startup move,
@@ -503,7 +509,7 @@ Dry run/default preview:
 ros2 launch kilin_hip_characterization characterization.launch.py
 ```
 
-For a real run, first copy and review a profile and create the run directory. Then explicitly provide `armed:=true`, `command_topic:=/motor/command`, and `run_dir:=...`. In strategy 1.5.2, `speed_ik` and `torque_assist` are published only during moving hip phases; hubs are rest otherwise.
+For a real run, first copy and review a profile and create the run directory. Then explicitly provide `armed:=true`, `command_topic:=/motor/command`, and `run_dir:=...`. In strategy 1.7.0, `speed_ik` and `torque_assist` are published only during moving hip phases; hubs are rest otherwise.
 
 ## Offline analysis
 

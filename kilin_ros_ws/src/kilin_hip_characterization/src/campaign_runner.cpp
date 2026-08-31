@@ -48,7 +48,7 @@ class CampaignRunner final : public rclcpp::Node {
     state_topic_ = declare_parameter<std::string>("state_topic", "/motor/state");
     run_dir_ = declare_parameter<std::string>("run_dir", "");
     strategy_name_ = declare_parameter<std::string>("strategy_name", "phase_a_two_state_baseline");
-    strategy_version_ = declare_parameter<std::string>("strategy_version", "1.5.2");
+    strategy_version_ = declare_parameter<std::string>("strategy_version", "1.7.0");
     active_modules_ = declare_parameter<std::vector<std::string>>("active_modules", {"A", "B"});
     repetitions_ = declare_parameter<int>("repetitions", 3);
     state_a_deg_ = declare_parameter<double>("state_a_deg", 0.0);
@@ -77,8 +77,6 @@ class CampaignRunner final : public rclcpp::Node {
     static_breakaway_error_disable_rad_ = declare_parameter<double>("static_breakaway_error_disable_rad", 0.01);
     static_breakaway_dwell_speed_rad_s_ = declare_parameter<double>("static_breakaway_dwell_speed_rad_s", 0.03);
     static_breakaway_release_speed_rad_s_ = declare_parameter<double>("static_breakaway_release_speed_rad_s", 0.10);
-    static_breakaway_velocity_fade_rad_s_ = declare_parameter<double>("static_breakaway_velocity_fade_rad_s", 0.05);
-    static_breakaway_velocity_fade_power_ = declare_parameter<double>("static_breakaway_velocity_fade_power", 2.0);
     static_breakaway_velocity_filter_alpha_ = declare_parameter<double>("static_breakaway_velocity_filter_alpha", 0.20);
     static_breakaway_velocity_source_ = declare_parameter<std::string>("static_breakaway_velocity_source", "raw");
     static_breakaway_angle_mode_ = declare_parameter<std::string>("static_breakaway_angle_mode", "none");
@@ -119,7 +117,6 @@ class CampaignRunner final : public rclcpp::Node {
         static_breakaway_error_enable_rad_ < static_breakaway_error_disable_rad_ ||
         static_breakaway_error_full_rad_ < static_breakaway_error_enable_rad_ ||
         static_breakaway_dwell_speed_rad_s_ < 0.0 || static_breakaway_release_speed_rad_s_ < 0.0 ||
-        static_breakaway_velocity_fade_rad_s_ < 0.0 || static_breakaway_velocity_fade_power_ <= 0.0 ||
         static_breakaway_velocity_filter_alpha_ <= 0.0 || static_breakaway_velocity_filter_alpha_ > 1.0 ||
         static_breakaway_angle_blend_outward_ < 0.0 || static_breakaway_angle_blend_outward_ > 1.0 ||
         static_breakaway_angle_blend_inward_ < 0.0 || static_breakaway_angle_blend_inward_ > 1.0 ||
@@ -334,12 +331,6 @@ class CampaignRunner final : public rclcpp::Node {
     return std::isfinite(selected) ? selected : 0.0;
   }
 
-  double breakawayVelocityGate(size_t i) const {
-    if (static_breakaway_velocity_fade_rad_s_ == 0.0) return 1.0;
-    const double ratio = std::abs(breakawayVelocity(i)) / static_breakaway_velocity_fade_rad_s_;
-    return std::exp(-std::pow(ratio, static_breakaway_velocity_fade_power_));
-  }
-
   double staticBreakawayFF(size_t i, double error, bool outward) {
     commanded_static_breakaway_ff_[i] = 0.0;
     breakaway_dwell_trace_[i] = 0.0;
@@ -380,12 +371,14 @@ class CampaignRunner final : public rclcpp::Node {
     }
     state.dwell_s += dt_s;
 
+    // Preserve the enable/full/disable ramp, but use the direct linear slope.
+    // The shared smooth() helper remains only for trajectory interpolation.
     const double error_gate = static_breakaway_error_full_rad_ == static_breakaway_error_enable_rad_
         ? 1.0
-        : smooth((error_abs - static_breakaway_error_enable_rad_) /
-                 (static_breakaway_error_full_rad_ - static_breakaway_error_enable_rad_));
+        : clamp01((error_abs - static_breakaway_error_enable_rad_) /
+                  (static_breakaway_error_full_rad_ - static_breakaway_error_enable_rad_));
     const double amplitude = breakawayBaseAmplitude(outward, state.dwell_s) *
-        error_gate * breakawayVelocityGate(i) * breakawayAngleFactor(i, outward);
+        error_gate * breakawayAngleFactor(i, outward);
     const double command = std::clamp(std::copysign(1.0, error) * amplitude, -max_ff_, max_ff_);
     commanded_static_breakaway_ff_[i] = command;
     breakaway_dwell_trace_[i] = state.dwell_s;
@@ -507,8 +500,6 @@ class CampaignRunner final : public rclcpp::Node {
              << "\nstatic_breakaway_error_disable_rad: " << static_breakaway_error_disable_rad_
              << "\nstatic_breakaway_dwell_speed_rad_s: " << static_breakaway_dwell_speed_rad_s_
              << "\nstatic_breakaway_release_speed_rad_s: " << static_breakaway_release_speed_rad_s_
-             << "\nstatic_breakaway_velocity_fade_rad_s: " << static_breakaway_velocity_fade_rad_s_
-             << "\nstatic_breakaway_velocity_fade_power: " << static_breakaway_velocity_fade_power_
              << "\nstatic_breakaway_velocity_filter_alpha: " << static_breakaway_velocity_filter_alpha_
              << "\nstatic_breakaway_velocity_source: " << static_breakaway_velocity_source_
              << "\n";
@@ -530,7 +521,7 @@ class CampaignRunner final : public rclcpp::Node {
   bool armed_{false}, have_state_{false}; int repetitions_{3}, completed_repetitions_{0}; uint32_t sequence_{0};
   std::string command_topic_, state_topic_, run_dir_, strategy_name_, strategy_version_; std::vector<std::string> active_modules_;
   double state_a_deg_{0}, state_b_deg_{45}, startup_speed_{.1}, recovery_deg_{0}, recovery_speed_{.1}, recovery_rest_s_{1}, hip_speed_{.2}, kp_{360}, ki_{0}, kd_{5}, max_ff_{200}, start_hold_s_{2}, segment_hold_s_{1}, max_state_age_s_{.1}, max_error_rad_{.35}, max_torque_{400}, wheel_torque_outward_{0}, wheel_torque_inward_{0}, max_wheel_torque_{20}, hip_to_wheel_m_{.260}, wheel_radius_m_{.051}, wheel_rate_deadband_rad_s_{.02};
-  double static_breakaway_step_1_s_{.10}, static_breakaway_step_2_s_{.30}, static_breakaway_exp_start_outward_{0}, static_breakaway_exp_peak_outward_{0}, static_breakaway_exp_start_inward_{0}, static_breakaway_exp_peak_inward_{0}, static_breakaway_exp_tau_s_{.20}, static_breakaway_error_enable_rad_{.02}, static_breakaway_error_full_rad_{.05}, static_breakaway_error_disable_rad_{.01}, static_breakaway_dwell_speed_rad_s_{.03}, static_breakaway_release_speed_rad_s_{.10}, static_breakaway_velocity_fade_rad_s_{.05}, static_breakaway_velocity_fade_power_{2}, static_breakaway_velocity_filter_alpha_{.20}, static_breakaway_angle_blend_outward_{0}, static_breakaway_angle_blend_inward_{0}, static_breakaway_angle_min_deg_{15}, static_breakaway_angle_max_deg_{90};
+  double static_breakaway_step_1_s_{.10}, static_breakaway_step_2_s_{.30}, static_breakaway_exp_start_outward_{0}, static_breakaway_exp_peak_outward_{0}, static_breakaway_exp_start_inward_{0}, static_breakaway_exp_peak_inward_{0}, static_breakaway_exp_tau_s_{.20}, static_breakaway_error_enable_rad_{.02}, static_breakaway_error_full_rad_{.05}, static_breakaway_error_disable_rad_{.01}, static_breakaway_dwell_speed_rad_s_{.03}, static_breakaway_release_speed_rad_s_{.10}, static_breakaway_velocity_filter_alpha_{.20}, static_breakaway_angle_blend_outward_{0}, static_breakaway_angle_blend_inward_{0}, static_breakaway_angle_min_deg_{15}, static_breakaway_angle_max_deg_{90};
   std::string wheel_mode_, static_breakaway_policy_, static_breakaway_angle_mode_, static_breakaway_velocity_source_;
   std::vector<double> static_breakaway_steps_outward_, static_breakaway_steps_inward_;
   std::array<HipState, 4> hips_{};
