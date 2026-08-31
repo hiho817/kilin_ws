@@ -33,10 +33,36 @@ only after each unit is executed, as experiment evidence.
 Every YAML carries `strategy_name` and numeric `strategy_version`; changing a
 control policy requires a new name/version before an experiment is run.
 
-The readable runner currently forces wheels to `rest` for startup, the hip test,
-and recovery. Wheel speed, torque, brake, and feedback-initialized
-`position_hold` will be restored in the next wheel-test revision; do not put
-wheel-mode parameters in a current profile and assume they are active.
+### Wheel-mode status and intended interface
+
+**Strategy 1.1.0 supports `rest` only.** The executable writes hub `rest` on
+every startup, test, hold, recovery, and abort command. It therefore cannot be
+used to test wheel velocity or wheel torque yet. A YAML `wheel_mode`,
+`wheel_torque_*`, or wheel-geometry field is silently ignored by this revision;
+do not use such a profile as evidence for a wheel-assisted experiment.
+
+The next wheel-enabled strategy will add one explicit `wheel_mode` and will
+record its wheel policy in the manifest. Its modes will mean:
+
+| Future mode | Hub command during hip test | Intended use and safety rule |
+| --- | --- | --- |
+| `rest` | Hub motor mode `rest`; no active velocity or torque command. | Baseline hip-only test. This remains mandatory for startup, recovery, and abort. |
+| `brake` | Hub motor mode `brake`; no velocity or torque setpoint. | Constrain wheel rotation while measuring the transmission. It is not an active wheel-position controller. |
+| `speed_ik` | Hub velocity is calculated live from the commanded hip trajectory at every control tick. | The wheel follows hip motion kinematically; it is never a fixed speed. The command field uses the established RPM-times-ten unit: `hub.velocity = wheel_rate_rad_s × 60 × 10 / (2π)`. |
+| `torque_assist` | Hub torque magnitude is a fixed configuration value. Only its sign is selected from the live IK wheel-rate direction. | Assist the same direction as `speed_ik` while the hip extends/contracts. The torque is **not** calculated from IK. Outward and inward fixed magnitudes may differ and require a dedicated lower hub-torque clamp. |
+| `position_hold` | Hub position is initialized from its measured position before enabling position mode. | Only for a later dedicated test. Starting position mode with a zero command when the wheel is already rotated can cause a violent spin, so a fixed zero reference is prohibited. |
+
+For `speed_ik`, IK supplies both the live wheel-rate magnitude and direction.
+For `torque_assist`, IK supplies **only the direction**; the magnitude comes
+unchanged from the profile. The direction comes from the Jack hip-test
+kinematic convention, evaluated from the live commanded hip angle and hip
+rate. In the simple planar model this is
+`wheel_rate = -L × cos(commanded_hip_angle) × hip_rate / R`, where `L` is the
+hip-to-wheel distance and `R` is wheel radius. The torque sign must equal the
+sign of that computed wheel rate; it must not be a constant "forward" sign.
+Near zero wheel rate, the implementation will apply a deadband and send zero
+torque to prevent sign chatter. Wheel-speed and fixed-torque limits will be separately
+bounded and logged with the hip command before any armed wheel-mode campaign.
 
 ## Complete runner parameter reference
 
@@ -209,7 +235,7 @@ Dry run/default preview:
 ros2 launch kilin_hip_characterization characterization.launch.py
 ```
 
-For a real run, first copy and review a profile and create the run directory. Then explicitly provide `armed:=true`, `command_topic:=/motor/command`, and `run_dir:=...`. This package must be the only command authority for the test. The real wheel velocity field uses the existing RPM-times-ten encoding; the runner derives physical wheel speed from the live hip IK and converts it before publishing.
+For a real run, first copy and review a profile and create the run directory. Then explicitly provide `armed:=true`, `command_topic:=/motor/command`, and `run_dir:=...`. This package must be the only command authority for the test. In strategy 1.1.0, hubs remain in `rest`; the RPM-times-ten velocity conversion described above is a future `speed_ik` interface, not a currently published command.
 
 ## Offline analysis
 

@@ -23,7 +23,12 @@ There are independent direct motor-command terms: `hip_ff_outward_direct`, `hip_
 
 FF is disabled during zero/hold states, when desired velocity is too small, when the measured error is opposite to the planned move, and with enable/disable error hysteresis near target.  This avoids sign chatter and unstable assistance when commanded and actual positions are close.  `max_abs_hip_ff_torque_nm` remains a dedicated 200 command clamp.
 
-Wheel speed uses the live IK relation `wheel_rate = -L*cos(commanded_hip)*hip_rate/R`.  In torque mode the torque sign follows that wheel-rate direction.  Rest, brake, speed, torque and captured position-hold are separate wheel conditions.
+Strategy 1.1.0 keeps hubs in `rest` throughout and does not implement wheel
+conditions. The next wheel-enabled strategy will use the live IK relation
+`wheel_rate = -L*cos(commanded_hip)*hip_rate/R`; speed mode uses the computed
+rate, while torque-assist mode uses a fixed configured torque magnitude whose
+sign follows that wheel-rate direction. Rest, brake, speed, torque, and
+feedback-captured position hold will be separately versioned conditions.
 
 ## Version rule
 
