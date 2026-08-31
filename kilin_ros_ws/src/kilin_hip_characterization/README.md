@@ -25,25 +25,20 @@ state-A hold → slow static-release ramp → dynamic move to state B
 
 The static-release segment is intentional: worm-gear breakaway/static friction must be measured separately from the dynamic part. The runner logs phase IDs, therefore offline analysis can compare static-to-dynamic transition behavior directly.
 
-The initial profile is `config/initial_screening.yaml`. Copy it once per parameter cell and preserve that exact copy in the run directory. Run front (`A,B`), rear (`C,D`), left (`A,C`), and right (`B,D`) profiles. Every cell uses at least three repetitions.
+The initial profile is `config/initial_screening.yaml`. For experiments, keep
+one direct `profile.yaml` or one master `master.yaml` in the dated log
+directory. A master file supplies defaults plus named unit-test overrides; no
+cells are generated beforehand. The runner writes the fully resolved profile
+only after each unit is executed, as experiment evidence.
 
-`config/phase_a_campaign_2026-08-31.yaml` is the reviewed single source of truth for Phase-A matrices and shared parameters. Generate a stage from it, always into a new directory:
-
-```bash
-python3 scripts/generate_phase_a_matrix.py \
-  config/phase_a_campaign_2026-08-31.yaml /tmp/test02_cells --stage test02_rest_speed
-```
-
-The wheel campaign has separate `test05_wheel`, `test05_torque_10`, and
-`test05_torque_20` stages so every torque magnitude is explicit in its YAML.
-
-The YAML carries `strategy_name` and numeric `strategy_version`; changing a matrix or control-policy default requires copying it to a new named strategy and version before generation.
+Every YAML carries `strategy_name` and numeric `strategy_version`; changing a
+control policy requires a new name/version before an experiment is run.
 
 Wheel modes are `rest`, `brake`, `speed`, `torque`, and `position_hold`. In torque mode, `wheel_torque_outward_nm` and `wheel_torque_inward_nm` are explicit direct-command magnitudes; torque is neutral during holds and its sign follows the live-IK wheel-speed direction. Wheel position hold is feedback-initialized.
 
 ## Run directory and recording
 
-Follow the 2026-08-26/27 convention: one dated folder, one immutable run folder per parameter cell, a README table updated before and after each run, the copied profile, terminal log, and bag.
+Follow the 2026-08-26/27 convention: one dated folder, one immutable run folder per unit test, a README table updated before and after each run, the copied/resolved profile, terminal log, and bag.
 
 ```text
 ~/kilin_ws/logs/YYYY-MM-DD/
@@ -65,6 +60,24 @@ ros2 bag record -o <run_dir>/bag /motor/state /motor/command /power/state /power
 Add Vicon, force-plate, and trigger topics for force/contact sessions. Do not rename rosbag files after recording. The runner trace is a compact synchronized command/state analysis file; the bag remains the authoritative raw evidence.
 
 ## Dry run and real run
+
+For a direct one-unit profile with automatic bag/manifest handling:
+
+```bash
+ros2 run kilin_hip_characterization single_runner.py --armed <profile.yaml> <new-run-directory>
+```
+
+For a master batch profile, each named unit test is resolved into its own
+evidence folder. The batch stops on the first fault/refusal rather than moving
+to the next unit:
+
+```bash
+ros2 run kilin_hip_characterization batch_runner.py --armed <master.yaml> <new-batch-run-directory>
+```
+
+The unit runner moves to state A at `startup_move_speed_rad_s`, uses zero FF
+and wheels rest during this move, then performs the test. It rests, reads
+feedback, and moves to global `recovery_position_deg` after each unit.
 
 Build in the normal clean overlay environment:
 
