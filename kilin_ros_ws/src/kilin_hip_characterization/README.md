@@ -9,7 +9,6 @@ One ROS 2 package for low-level hip-transmission characterization, PID and bound
 - It sends nothing until `/motor/state` is fresh, then captures current hip and hub feedback as its starting state.
 - New-recording convention is `actual_hip_angle_rad = motor_position + position_diff`.
 - Hip commands target that reconstructed physical angle: the motor-side command is `desired_actual - current_position_diff`.
-- Wheel `position_hold` captures current hub feedback as its target. It never commands a zero wheel position at startup.
 - Safety aborts on stale state, non-finite state, motor error code, configured hip-torque bound, or configured actual-angle tracking bound. Abort sends hip rest and hub brake.
 
 The package does not modify `kilin_com_estimator`, the terrain planner, or FAST-LIO2.
@@ -34,7 +33,118 @@ only after each unit is executed, as experiment evidence.
 Every YAML carries `strategy_name` and numeric `strategy_version`; changing a
 control policy requires a new name/version before an experiment is run.
 
-Wheel modes are `rest`, `brake`, `speed`, `torque`, and `position_hold`. In torque mode, `wheel_torque_outward_nm` and `wheel_torque_inward_nm` are explicit direct-command magnitudes; torque is neutral during holds and its sign follows the live-IK wheel-speed direction. Wheel position hold is feedback-initialized.
+The readable runner currently forces wheels to `rest` for startup, the hip test,
+and recovery. Wheel speed, torque, brake, and feedback-initialized
+`position_hold` will be restored in the next wheel-test revision; do not put
+wheel-mode parameters in a current profile and assume they are active.
+
+## Complete runner parameter reference
+
+The direct runner reads parameters below `kilin_hip_characterization.ros__parameters`.
+The master runner merges `kilin_hip_batch.defaults` with each test's
+`parameters` mapping and writes the resulting values to that unit's
+`resolved_profile.yaml`.
+
+### Invocation and provenance
+
+| Parameter | Type / default | Exact effect |
+| --- | --- | --- |
+| `armed` | bool / `false` | Hardware gate. Nothing is commanded while false. `single_runner.py` and `batch_runner.py` set it true only with their `--armed` flag. |
+| `command_topic` | string / preview topic | `MotorCmdStamped` destination. An armed helper overrides it to `/motor/command`. |
+| `state_topic` | string / `/motor/state` | Feedback source. The run waits for fresh feedback before starting. |
+| `run_dir` | string / empty | Evidence folder. Required for an armed direct controller invocation; the helpers set it automatically. |
+| `bag_topics` | string list / six base topics | Topics passed to `ros2 bag record` by `single_runner.py` or `batch_runner.py`. Place it in a direct profile's `ros__parameters`, or master `defaults`; a unit-test override may replace it. The helper removes it before passing the resolved profile to the C++ controller and saves the final list as `bag_topics.txt`. |
+| `strategy_name` | string | Human-readable control/analysis strategy name, recorded in the manifest. |
+| `strategy_version` | numeric string | Revision of that strategy, e.g. `1.0.0`, recorded in the manifest. |
+
+### Test selection and geometry
+
+| Parameter | Type / default | Exact effect |
+| --- | --- | --- |
+| `active_modules` | string list / `[A,B]` | Hips selected for the unit. `A,B` are front; `C,D` rear; `A,C` left; `B,D` right. Inactive hips are commanded to physical zero during position phases. |
+| `repetitions` | integer / `3` | Number of complete A→B→A cycles before recovery. Must be at least one; use three or more for analysis. |
+| `state_a_deg` | degrees / `0` | Initial and return hip magnitude. The runner maps front hips to negative and rear hips to positive physical angles. |
+| `state_b_deg` | degrees / `45` | Other hip magnitude for the same mapping. `(0,45)` is baseline; `(15,45)` deliberately starts from a nonzero extension. |
+| `startup_move_speed_rad_s` | rad/s / `0.1` | Smooth position move from current measured angle to state A before the unit test. Hip FF is forced to zero and wheels rest. |
+| `recovery_position_deg` | degrees / `0` | Active-hip magnitude reached after every unit test. |
+| `recovery_move_speed_rad_s` | rad/s / `0.1` | Smooth state-A/recovery move speed after the all-motor rest interval. |
+| `recovery_rest_s` | seconds / `1.0` | Rest interval between the final cycle and the recovery move; feedback continues to be read. |
+
+### Hip trajectory and PID
+
+| Parameter | Type / default | Exact effect |
+| --- | --- | --- |
+| `hip_speed_rad_s` | rad/s / `0.2` | Constant-speed dynamic portion of A→B and B→A motion. It must be positive. |
+| `start_zero_hold_s` | seconds / `2.0` | Position hold at state A after startup, before static release. The name is historical; it applies even when A is not zero. |
+| `static_release_ramp_s` | seconds / `1.0` | Smooth duration of the initial low-distance static-release segment. |
+| `static_release_fraction` | fraction / `0.15` | Fraction of the A→B stroke assigned to static release. The remaining fraction is the constant-speed dynamic move. Use `0.15` initially. |
+| `segment_hold_s` | seconds / `1.0` | Position hold at state B before returning to A. |
+| `kp`, `ki`, `kd` | direct motor gains / `360,0,5` | Hip position-loop gains copied directly into every hip `MotorCmd`. Change only one candidate dimension at a time during PID screening. |
+
+#### Static-release phase in detail
+
+Static release is the deliberately slow first part of every A→B movement. It
+is intended to reveal worm-gear breakaway, stiction, and backlash before the
+constant-speed tracking result is mixed in.
+
+For an A→B stroke of `D = state_b_deg - state_a_deg`, the runner executes:
+
+```text
+1. Hold state A for start_zero_hold_s.
+2. Move smoothly through static_release_fraction × D over static_release_ramp_s.
+3. Move through the remaining (1 - static_release_fraction) × D at hip_speed_rad_s.
+4. Hold B, then return from B to A at hip_speed_rad_s.
+```
+
+With the baseline values `A=0°`, `B=45°`, `static_release_fraction=0.15`, and
+`static_release_ramp_s=1.0`, the first 6.75° is a smooth one-second breakaway
+test. The remaining 38.25° is the dynamic outward move. The return 45° is a
+separate dynamic inward/raising measurement; it does not reuse the static
+release ramp.
+
+The static release uses a smoothstep position ramp: it starts and ends with
+zero commanded velocity, avoiding an artificial velocity step. PID remains
+active throughout. During this phase only,
+`hip_ff_static_outward_direct` is used for outward movement (or
+`hip_ff_static_inward_direct` if an inward static-release strategy is later
+introduced). Dynamic movement uses `hip_ff_outward_direct` or
+`hip_ff_inward_direct` instead.
+
+Keep `static_release_fraction` strictly between `0` and `1`; use a small value
+such as `0.10–0.20` so it characterizes breakaway without turning the whole
+stroke into a quasi-static test. Change one of fraction, ramp duration, PID, or
+static FF at a time. Compare static-release tracking error/torque with the
+following dynamic segment; do not average them into one undifferentiated score.
+
+### Hip feedforward
+
+| Parameter | Type / default | Exact effect |
+| --- | --- | --- |
+| `hip_ff_outward_direct` | direct command / `0` | Magnitude added during dynamic motion whose planned direction is outward/lowering. Sign is selected from planned front/rear movement. |
+| `hip_ff_inward_direct` | direct command / `0` | Magnitude added during dynamic inward/raising movement. It may differ from outward FF. |
+| `hip_ff_static_outward_direct` | direct command / `0` | Magnitude used only during the outward static-release ramp. |
+| `hip_ff_static_inward_direct` | direct command / `0` | Magnitude used during an inward static-release ramp; current two-state baseline only has an outward initial static-release segment. |
+| `max_abs_hip_ff_torque_nm` | direct-command clamp / `200` | Absolute clamp applied after FF direction selection. It is independent of the broader hip safety torque limit. |
+
+### Safety and observability
+
+| Parameter | Type / default | Exact effect |
+| --- | --- | --- |
+| `max_state_age_s` | seconds / `0.10` | Maximum acceptable age of `/motor/state`. A stale state rests all motors and aborts. |
+| `max_abs_hip_error_rad` | radians / `0.35` | Largest allowed actual-minus-commanded reconstructed hip-angle error. A breach aborts. |
+| `max_abs_hip_torque_nm` | feedback units / `400` | Largest allowed absolute hip torque feedback value. A breach aborts. Confirm feedback units on hardware before changing it. |
+
+The runner logs phase changes to the terminal and `launch.log`: startup move,
+state-A hold, static release, move to B, hold at B, return to A, recovery
+rest, recovery move, complete, or aborted. `command_state_trace.csv` uses
+`actual_hip_angle_rad = motor_position + position_diff`.
+
+On every abort, the terminal and `launch.log` identify the module, phase,
+reason, measured value, and configured limit where applicable. The same reason
+is saved as `<run_dir>/abort_reason.txt`. For example, a tracking abort reports
+`module=A phase=move_to_state_b reason=hip_tracking_error_limit` plus
+commanded actual angle, measured actual angle, signed error, and its absolute
+limit.
 
 ## Run directory and recording
 

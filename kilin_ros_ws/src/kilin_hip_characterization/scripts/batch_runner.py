@@ -4,6 +4,8 @@ import argparse, signal, subprocess, sys
 from pathlib import Path
 import yaml
 
+DEFAULT_BAG_TOPICS=["/motor/state","/motor/command","/power/state","/power/command","/tf","/tf_static"]
+
 def main():
     p=argparse.ArgumentParser();p.add_argument("master",type=Path);p.add_argument("run_root",type=Path);p.add_argument("--armed",action="store_true");a=p.parse_args()
     if not a.armed: p.error("refusing to actuate without --armed")
@@ -11,11 +13,13 @@ def main():
     defaults=spec["defaults"]; tests=spec["tests"]; a.run_root.mkdir(parents=True,exist_ok=False)
     for index,test in enumerate(tests,1):
         name=test["name"]; params=dict(defaults);params.update(test.get("parameters",{})); params.pop("name",None)
+        bag_topics=params.pop("bag_topics",DEFAULT_BAG_TOPICS)
         run=a.run_root/f"{index:03d}_{name}";run.mkdir(); profile=run/"resolved_profile.yaml"
         print(f"[batch] {index}/{len(tests)} starting {name}")
         params.update({"armed":True,"command_topic":"/motor/command","run_dir":str(run)})
         profile.write_text(yaml.safe_dump({"kilin_hip_characterization":{"ros__parameters":params}},sort_keys=False))
-        bag=subprocess.Popen(["ros2","bag","record","-o",str(run/"bag"),"/motor/state","/motor/command","/power/state","/power/command","/tf","/tf_static"],stdout=(run/"bag.log").open("w"),stderr=subprocess.STDOUT)
+        (run/"bag_topics.txt").write_text("\n".join(bag_topics)+"\n")
+        bag=subprocess.Popen(["ros2","bag","record","-o",str(run/"bag"),*bag_topics],stdout=(run/"bag.log").open("w"),stderr=subprocess.STDOUT)
         try:
             output=[]
             with (run/"launch.log").open("w") as log:

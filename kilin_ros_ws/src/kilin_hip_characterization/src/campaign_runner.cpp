@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -74,7 +75,7 @@ class CampaignRunner final : public rclcpp::Node {
     max_torque_ = declare_parameter<double>("max_abs_hip_torque_nm", 400.0);
 
     if (armed_ && run_dir_.empty()) throw std::runtime_error("armed run requires run_dir");
-    if (repetitions_ < 1 || startup_speed_ <= 0.0 || recovery_speed_ <= 0.0 || hip_speed_ <= 0.0) throw std::runtime_error("invalid speed or repetitions");
+    if (repetitions_ < 1 || startup_speed_ <= 0.0 || recovery_speed_ <= 0.0 || hip_speed_ <= 0.0 || static_release_s_ <= 0.0 || static_release_fraction_ <= 0.0 || static_release_fraction_ >= 1.0) throw std::runtime_error("invalid repetitions, speed, or static-release settings");
     for (const auto &name : active_modules_) {
       if (std::find(kModuleNames.begin(), kModuleNames.end(), name) == kModuleNames.end()) throw std::runtime_error("unknown active module");
     }
@@ -132,17 +133,26 @@ class CampaignRunner final : public rclcpp::Node {
     return std::max(0.01, distance / hip_speed_);
   }
 
-  bool unsafe() const {
+  std::string safetyViolation() const {
     for (size_t i = 0; i < 4; ++i) {
-      if (!std::isfinite(actual(i)) || !std::isfinite(hips_[i].torque)) return true;
-      if (hips_[i].error != 0 || std::abs(hips_[i].torque) > max_torque_) return true;
-      if (std::abs(actual(i) - commanded_[i]) > max_error_rad_) return true;
+      std::ostringstream message;
+      message << "module=" << kModuleNames[i] << " phase=" << phaseName(phase_);
+      if (!std::isfinite(actual(i))) return message.str() + " reason=non_finite_actual_hip";
+      if (!std::isfinite(hips_[i].torque)) return message.str() + " reason=non_finite_hip_torque";
+      if (hips_[i].error != 0) return message.str() + " reason=hip_motor_reported_fault error_code=" + std::to_string(hips_[i].error);
+      if (std::abs(hips_[i].torque) > max_torque_) {
+        message << " reason=hip_torque_limit measured=" << hips_[i].torque << " limit=" << max_torque_;
+        return message.str();
+      }
+      const double tracking_error = actual(i) - commanded_[i];
+      if (std::abs(tracking_error) > max_error_rad_) {
+        message << " reason=hip_tracking_error_limit commanded_actual_rad=" << commanded_[i]
+                << " actual_rad=" << actual(i) << " error_rad=" << tracking_error
+                << " abs_limit_rad=" << max_error_rad_;
+        return message.str();
+      }
     }
-    return false;
-  }
-
-  void reportFault() const {
-    for (size_t i = 0; i < 4; ++i) if (hips_[i].error != 0) RCLCPP_ERROR(get_logger(), "Fault name=hip_motor_reported_fault module=%s error_code=%d", kModuleNames[i], hips_[i].error);
+    return "";
   }
 
   void commandPosition(const std::array<double, 4> &target, bool allow_ff) {
@@ -186,7 +196,8 @@ class CampaignRunner final : public rclcpp::Node {
     if (!armed_) return;
     if (!freshState()) { if (phase_ != Phase::kWaitForState) abort("/motor/state is stale"); return; }
     if (phase_ == Phase::kWaitForState) { try { begin(); } catch (const std::exception &e) { abort(e.what()); } return; }
-    if (unsafe()) { reportFault(); abort("motor error, torque, non-finite feedback, or tracking limit"); return; }
+    const std::string violation = safetyViolation();
+    if (!violation.empty()) { abort(violation); return; }
     const auto a = stateArray(false), b = stateArray(true), r = recoveryArray();
     switch (phase_) {
       case Phase::kStartupMove:
@@ -228,7 +239,17 @@ class CampaignRunner final : public rclcpp::Node {
     }
   }
 
-  void abort(const std::string &reason) { if (phase_ == Phase::kAborted) return; publishRest(); setPhase(Phase::kAborted, reason); RCLCPP_ERROR(get_logger(), "Campaign aborted: %s", reason.c_str()); rclcpp::shutdown(); }
+  void abort(const std::string &reason) {
+    if (phase_ == Phase::kAborted) return;
+    publishRest();
+    setPhase(Phase::kAborted, reason);
+    RCLCPP_ERROR(get_logger(), "Campaign aborted: %s", reason.c_str());
+    if (!run_dir_.empty()) {
+      std::ofstream out(fs::path(run_dir_) / "abort_reason.txt");
+      out << "phase: " << phaseName(phase_) << "\nreason: " << reason << "\n";
+    }
+    rclcpp::shutdown();
+  }
   void complete() { publishRest(); setPhase(Phase::kComplete, "all repetitions and recovery complete"); RCLCPP_INFO(get_logger(), "Campaign complete."); rclcpp::shutdown(); }
   void stamp(kilin_msgs::msg::MotorCmdStamped &message) { const auto t = now(); message.header.seq = sequence_++; message.header.time.sec = static_cast<int32_t>(t.seconds()); message.header.time.nanosec = static_cast<uint32_t>(t.nanoseconds() % 1000000000LL); message.header.frame_id = "kilin_hip_characterization"; }
   void publishRest() { kilin_msgs::msg::MotorCmdStamped message; stamp(message); kilin_msgs::msg::LegCmd leg; leg.hip.motor_mode=kRest; leg.steering.motor_mode=kRest; leg.hub.motor_mode=kBrake; message.module_a=leg;message.module_b=leg;message.module_c=leg;message.module_d=leg;publisher_->publish(message); }
