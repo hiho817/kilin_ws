@@ -36,6 +36,7 @@ def infer_flat_height_ahead(
     maximum_forward_m: float,
     half_width_m: float,
     maximum_height_span_m: float,
+    minimum_inlier_fraction: float = 1.0,
 ):
     """Infer a flat initial support height from a bounded observed strip.
 
@@ -57,9 +58,25 @@ def infer_flat_height_ahead(
     samples = heights[selected]
     if samples.size == 0:
         return None
-    if float(np.max(samples) - np.min(samples)) > float(maximum_height_span_m):
+    if not 0.0 < minimum_inlier_fraction <= 1.0:
+        raise ValueError("minimum_inlier_fraction must be in (0, 1]")
+    # A single misregistered return must not make a genuinely flat initial
+    # support strip unusable.  Select the largest sorted height cluster whose
+    # span respects the flatness limit, then require that it explains most of
+    # the measured nodes.  A ramp occupying a material part of the strip does
+    # not meet this dominant-cluster requirement and remains unsafe.
+    sorted_samples = np.sort(samples)
+    left = 0
+    best_left, best_right = 0, 0
+    for right in range(sorted_samples.size):
+        while sorted_samples[right] - sorted_samples[left] > float(maximum_height_span_m):
+            left += 1
+        if right - left > best_right - best_left:
+            best_left, best_right = left, right
+    cluster = sorted_samples[best_left : best_right + 1]
+    if cluster.size / samples.size < minimum_inlier_fraction:
         return None
-    return float(np.median(samples))
+    return float(np.median(cluster))
 
 
 def seed_initial_flat_support(

@@ -1,0 +1,74 @@
+# Conservative raw-motor controller default; copy to a dated run folder before
+# any armed trial.  position_diff is logged but is not fed into the command.
+kilin_hip_characterization:
+  ros__parameters:
+    armed: false
+    command_topic: /kilin/hip_characterization/command_preview
+    state_topic: /motor/state
+    run_dir: ""
+    strategy_name: phase_a_two_state_baseline
+    strategy_version: 1.8.0
+    repetitions: 3
+    active_modules: [A, B]
+    motion_mode: two_state_cycle
+    state_a_deg: 0.0
+    state_b_deg: 3.0
+    startup_state_tolerance_deg: 3.0
+    hip_speed_rad_s: 0.1
+    start_zero_hold_s: 2.0
+    segment_hold_s: 1.0
+    final_zero_hold_s: 3.0
+    fallback_segment_s: 2.0
+    kp: 360.0
+    ki: 0.0
+    kd: 5.0
+    max_abs_hip_ff_torque_nm: 200.0
+    # Disabled by default.  When enabled, this assist is evaluated during the
+    # normal A-to-B and B-to-A moves only; it does not create a separate phase.
+    static_breakaway_policy: disabled
+    static_breakaway_steps_outward_nm: [0.0, 0.0, 0.0]
+    static_breakaway_steps_inward_nm: [0.0, 0.0, 0.0]
+    static_breakaway_step_1_s: 0.10
+    static_breakaway_step_2_s: 0.30
+    static_breakaway_exp_start_outward_nm: 0.0
+    static_breakaway_exp_peak_outward_nm: 0.0
+    static_breakaway_exp_start_inward_nm: 0.0
+    static_breakaway_exp_peak_inward_nm: 0.0
+    static_breakaway_exp_tau_s: 0.20
+    static_breakaway_error_enable_rad: 0.02
+    static_breakaway_error_full_rad: 0.05
+    static_breakaway_error_disable_rad: 0.01
+    static_breakaway_dwell_speed_rad_s: 0.03
+    static_breakaway_release_speed_rad_s: 0.10
+    static_breakaway_velocity_filter_alpha: 0.20
+    # raw uses /motor/state velocity directly. Use filtered explicitly when
+    # low-pass velocity is preferred.
+    static_breakaway_velocity_source: raw
+    static_breakaway_angle_mode: none
+    static_breakaway_angle_blend_outward: 0.0
+    static_breakaway_angle_blend_inward: 0.0
+    # Hard inclusive motor-reference angle window for the optional policy.
+    # At the disabled default this has no effect.
+    static_breakaway_angle_min_deg: 15.0
+    static_breakaway_angle_max_deg: 90.0
+    ff_motion_min_rate_rad_s: 0.03
+    ff_error_enable_rad: 0.010
+    ff_error_disable_rad: 0.004
+    # Hub stays rest in this conservative default.  Use speed_ik or
+    # torque_assist only in a new wheel-mode strategy/profile.
+    wheel_mode: rest
+    wheel_torque_outward_nm: 0.0
+    wheel_torque_inward_nm: 0.0
+    max_abs_hub_torque_nm: 20.0
+    hip_to_wheel_m: 0.260
+    wheel_radius_m: 0.051
+    wheel_rate_deadband_rad_s: 0.02
+    # Speed-IK validity uses feedback hub-position travel versus integrated
+    # commanded wheel travel. It flags bad data but does not abort the unit.
+    hub_travel_validation_enabled: true
+    hub_travel_ratio_min: 0.75
+    hub_travel_ratio_max: 1.25
+    hub_travel_min_command_rad: 0.25
+    max_abs_hip_error_rad: 0.35
+    max_abs_hip_torque_nm: 400.0
+    max_state_age_s: 0.10

@@ -212,11 +212,12 @@ class KnownTerrainController(Node):
             "live_terrain.initial_flat_support.rear_m": 0.65,
             # Covers the initial five-knot preview plus the approximately
             # 0.6 m near-field LiDAR blind strip seen on the real MID360s.
-            "live_terrain.initial_flat_support.forward_m": 0.75,
+            "live_terrain.initial_flat_support.forward_m": 0.85,
             "live_terrain.initial_flat_support.half_width_m": 0.50,
             "live_terrain.initial_flat_support.measurement_min_forward_m": 0.20,
             "live_terrain.initial_flat_support.measurement_max_forward_m": 0.80,
             "live_terrain.initial_flat_support.maximum_height_span_m": 0.05,
+            "live_terrain.initial_flat_support.minimum_inlier_fraction": 0.80,
             "live_terrain.isolated_hole_fill.enabled": True,
             "live_terrain.isolated_hole_fill.maximum_height_span_m": 0.08,
             "use_speed_command": False,
@@ -651,6 +652,7 @@ class KnownTerrainController(Node):
                     maximum_forward_m=float(self.get_parameter("live_terrain.initial_flat_support.measurement_max_forward_m").value),
                     half_width_m=float(self.get_parameter("live_terrain.initial_flat_support.half_width_m").value),
                     maximum_height_span_m=float(self.get_parameter("live_terrain.initial_flat_support.maximum_height_span_m").value),
+                    minimum_inlier_fraction=float(self.get_parameter("live_terrain.initial_flat_support.minimum_inlier_fraction").value),
                 )
                 if flat_height is not None:
                     self._initial_flat_support = (x_m, y_m, yaw_rad, flat_height, terrain.frame_id)

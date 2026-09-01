@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from collections import deque
 
 import numpy as np
 import rclpy
@@ -23,10 +22,12 @@ from visualization_msgs.msg import Marker
 
 from .elevation import (
     elevation_from_points,
+    fill_from_temporal_cell_memory,
     front_roi,
     grid_coordinates,
-    retained_window_roi,
+    prune_cell_memory_to_bounds,
     transform_points,
+    update_temporal_cell_memory,
     voxel_downsample,
 )
 
@@ -54,12 +55,22 @@ class LocalTerrain(Node):
             "output_frame": "map",
             "forward_m": 3.0, "rear_m": 1.0, "half_width_m": 1.0,
             "resolution_m": 0.05, "rate_hz": 5.0,
+            # Keep terrain cells on a fixed map lattice.  Without this, small
+            # FAST-LIO pose jitter re-bins the same retained points and makes
+            # terrain cells flicker in RViz and at planner query locations.
+            "grid_alignment.enabled": True,
             "minimum_points_per_cell": 2, "height_percentile": 50.0,
+            # Store one robust height per fixed map cell, never raw scans.  The
+            # cache is both time-limited and clipped to the rolling planner
+            # window, so it cannot grow into a global point cloud.
+            "temporal_cells.enabled": True,
+            "temporal_cells.maximum_height_deviation_m": 0.10,
+            "temporal_cells.replacement_observations": 2,
             "max_cloud_age_s": 2.0, "rolling_window_s": 1.0,
             # A terrain point is admitted only while it is observed ahead of
-            # the robot.  It is then retained in map coordinates until it
-            # leaves the planner window; this avoids losing an exit ramp when
-            # the ramp occludes the sensor after its first observation.
+            # the robot.  Its *cell height*, not the raw point, remains until
+            # it leaves the planner window; this avoids losing an exit ramp
+            # after occlusion without creating an accumulating point buffer.
             "retain_observed_terrain": True,
             "retained_terrain.max_age_s": 45.0,
             "retained_terrain.margin_m": 0.25,
@@ -87,7 +98,7 @@ class LocalTerrain(Node):
         for name, value in defaults.items():
             self.declare_parameter(name, value)
         self.pose = None
-        self.cloud_buffer = deque()
+        self.observed_cells = {}
         # Header stamps retain sensor time for the rolling terrain memory.
         # Freshness is deliberately based on local receipt time: a recorded
         # FAST-LIO cloud preserves the bag's original sensor timestamp, which
@@ -121,7 +132,6 @@ class LocalTerrain(Node):
     def cloud_callback(self, message):
         raw = point_cloud2.read_points(message, field_names=("x", "y", "z"), skip_nans=True)
         points = np.column_stack((raw["x"], raw["y"], raw["z"])).astype(float)
-        stamp_ns = int(message.header.stamp.sec) * 1_000_000_000 + int(message.header.stamp.nanosec)
         points = self._transform_to_frame(points, message.header.frame_id, str(self.get_parameter("output_frame").value))
         if points is None:
             return
@@ -134,14 +144,39 @@ class LocalTerrain(Node):
         points = self._front_roi_points(points)
         if points is None or not len(points):
             return
+        points = self._ground_height_gate(points)
+        if not len(points):
+            return
         points = voxel_downsample(points, float(self.get_parameter("retained_terrain.voxel_m").value))
-        self.cloud_buffer.append((stamp_ns, points))
-        memory_s = (float(self.get_parameter("retained_terrain.max_age_s").value)
-                    if bool(self.get_parameter("retain_observed_terrain").value)
-                    else float(self.get_parameter("rolling_window_s").value))
-        cutoff_ns = stamp_ns - int(memory_s * 1e9)
-        while self.cloud_buffer and self.cloud_buffer[0][0] < cutoff_ns:
-            self.cloud_buffer.popleft()
+        resolution = float(self.get_parameter("resolution_m").value)
+        lower_x = np.floor(np.min(points[:, 0]) / resolution) * resolution
+        upper_x = np.ceil(np.max(points[:, 0]) / resolution) * resolution
+        lower_y = np.floor(np.min(points[:, 1]) / resolution) * resolution
+        upper_y = np.ceil(np.max(points[:, 1]) / resolution) * resolution
+        xs = np.arange(lower_x, upper_x + resolution * 0.1, resolution)
+        ys = np.arange(lower_y, upper_y + resolution * 0.1, resolution)
+        elevation, valid, _ = elevation_from_points(
+            points, xs, ys, resolution,
+            int(self.get_parameter("minimum_points_per_cell").value),
+            float(self.get_parameter("height_percentile").value),
+            float(self.get_parameter("ground_filter.maximum_cell_vertical_span_m").value),
+        )
+        if bool(self.get_parameter("temporal_cells.enabled").value):
+            if not bool(self.get_parameter("retain_observed_terrain").value):
+                # Preserve the legacy switch: without retained terrain, only
+                # the current scan contributes to the next local window.
+                self.observed_cells.clear()
+            update_temporal_cell_memory(
+                self.observed_cells, xs, ys, elevation, valid,
+                resolution_m=resolution,
+                observed_ns=self.get_clock().now().nanoseconds,
+                maximum_height_deviation_m=float(
+                    self.get_parameter("temporal_cells.maximum_height_deviation_m").value
+                ),
+                replacement_observations=int(
+                    self.get_parameter("temporal_cells.replacement_observations").value
+                ),
+            )
 
     def _transform_to_frame(self, points, source_frame, target_frame):
         if source_frame == target_frame:
@@ -178,30 +213,6 @@ class LocalTerrain(Node):
                 (np.abs(hip_points[:, 1]) <= float(self.get_parameter("front_roi.half_width_m").value)) &
                 (hip_points[:, 2] >= float(self.get_parameter("front_roi.minimum_z_m").value)) &
                 (hip_points[:, 2] <= float(self.get_parameter("front_roi.maximum_z_m").value)))
-        return points[keep]
-
-    def _retained_window_points(self):
-        if not self.cloud_buffer:
-            return None
-        points = np.vstack([entry[1] for entry in self.cloud_buffer])
-        if not bool(self.get_parameter("retain_observed_terrain").value):
-            return points
-        hip_points = self._output_to_hip_points(points)
-        if hip_points is None:
-            return None
-        margin = float(self.get_parameter("retained_terrain.margin_m").value)
-        retained = retained_window_roi(
-            hip_points,
-            float(self.get_parameter("rear_m").value),
-            float(self.get_parameter("forward_m").value),
-            float(self.get_parameter("half_width_m").value),
-            margin,
-        )
-        if len(retained) == len(hip_points):
-            return points
-        keep = ((hip_points[:, 0] >= -float(self.get_parameter("rear_m").value) - margin) &
-                (hip_points[:, 0] <= float(self.get_parameter("forward_m").value) + margin) &
-                (np.abs(hip_points[:, 1]) <= float(self.get_parameter("half_width_m").value) + margin))
         return points[keep]
 
     def _output_to_hip_points(self, points):
@@ -263,7 +274,17 @@ class LocalTerrain(Node):
             self.get_logger().error(f"Odometry frame {self.pose.header.frame_id!r} is not {output_frame!r}", throttle_duration_sec=2.0)
             return
         position, resolution = self.pose.pose.pose.position, float(self.get_parameter("resolution_m").value)
-        xs, ys = grid_coordinates(position.x, position.y, float(self.get_parameter("forward_m").value), float(self.get_parameter("rear_m").value), float(self.get_parameter("half_width_m").value), resolution)
+        xs, ys = grid_coordinates(
+            position.x,
+            position.y,
+            float(self.get_parameter("forward_m").value),
+            float(self.get_parameter("rear_m").value),
+            float(self.get_parameter("half_width_m").value),
+            resolution,
+            align_to_resolution=bool(
+                self.get_parameter("grid_alignment.enabled").value
+            ),
+        )
         x, y = np.meshgrid(xs, ys)
         if str(self.get_parameter("terrain_source").value) == "analytic":
             elevation, valid = self._ramp(x, y, "analytic_ramp"), np.ones_like(x, dtype=bool)
@@ -274,19 +295,36 @@ class LocalTerrain(Node):
             if self.get_clock().now().nanoseconds - self.cloud_received_ns > int(float(self.get_parameter("max_cloud_age_s").value) * 1e9):
                 self.get_logger().warning("Terrain cloud is stale; withholding terrain window", throttle_duration_sec=2.0)
                 return
-            points = self._retained_window_points()
-            if points is None:
-                return
-            points = self._ground_height_gate(points)
-            elevation, valid, _ = elevation_from_points(
-                points,
-                xs,
-                ys,
-                resolution,
-                int(self.get_parameter("minimum_points_per_cell").value),
-                float(self.get_parameter("height_percentile").value),
-                float(self.get_parameter("ground_filter.maximum_cell_vertical_span_m").value),
-            )
+            elevation = np.zeros((len(ys), len(xs)), dtype=np.float32)
+            valid = np.zeros_like(elevation, dtype=bool)
+            if bool(self.get_parameter("temporal_cells.enabled").value):
+                now_ns = self.get_clock().now().nanoseconds
+                margin = float(self.get_parameter("retained_terrain.margin_m").value)
+                prune_cell_memory_to_bounds(
+                    self.observed_cells,
+                    minimum_x_m=float(xs[0]) - margin,
+                    maximum_x_m=float(xs[-1]) + margin,
+                    minimum_y_m=float(ys[0]) - margin,
+                    maximum_y_m=float(ys[-1]) + margin,
+                )
+                maximum_age_ns = int(float(
+                    self.get_parameter("retained_terrain.max_age_s").value
+                ) * 1e9)
+                elevation, valid, held = fill_from_temporal_cell_memory(
+                    self.observed_cells,
+                    xs,
+                    ys,
+                    elevation,
+                    valid,
+                    resolution_m=resolution,
+                    now_ns=now_ns,
+                    hold_ns=maximum_age_ns,
+                    maximum_age_ns=maximum_age_ns,
+                )
+                if held:
+                    self.get_logger().debug(
+                        f"Rolling terrain-cell cache supplied {held} cells"
+                    )
         message = TerrainWindow()
         message.header = self.pose.header
         message.header.frame_id = output_frame

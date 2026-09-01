@@ -204,15 +204,17 @@ For a live FAST-LIO terrain window, start Kilin on a verified flat approach
 area.  The MID360s front ROI cannot observe the ground immediately underneath
 the chassis, so the controller infers one fixed flat support patch from the
 observed strip 0.20--0.80 m ahead.  It then fills only the initial support
-envelope from 0.65 m behind to 0.75 m ahead of that starting pose.  This covers
+envelope from 0.65 m behind to 0.85 m ahead of that starting pose.  This covers
 the current five-knot preview and the measured near-field LiDAR blind strip;
 it is not translated with the robot and is never used to fill later unknown
 terrain.
 
-The reference strip must be flat (its observed height span must be at most
-50 mm).  If it is missing or non-flat, the controller deliberately retains the
+The reference strip must contain one dominant flat surface: at least 80% of its
+observed nodes must fit within a 50 mm height span.  This tolerates an isolated
+misregistered return but does not accept a ramp covering a material part of the
+strip.  If the strip is missing or non-flat, the controller deliberately retains the
 `terrain_unavailable` stop.  Place the robot so that the first ramp edge is
-more than 0.75 m ahead at startup.  The separate isolated-hole repair only
+more than 0.85 m ahead at startup.  The separate isolated-hole repair only
 fills one grid node when all four cardinal neighbours agree within 80 mm; it
 does not bridge a multi-cell gap, a window boundary, or a step.
 
