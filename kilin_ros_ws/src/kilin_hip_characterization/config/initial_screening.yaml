@@ -7,7 +7,7 @@ kilin_hip_characterization:
     state_topic: /motor/state
     run_dir: ""
     strategy_name: phase_a_two_state_baseline
-    strategy_version: 1.7.0
+    strategy_version: 1.8.0
     repetitions: 3
     active_modules: [A, B]
     motion_mode: two_state_cycle
@@ -63,6 +63,12 @@ kilin_hip_characterization:
     hip_to_wheel_m: 0.260
     wheel_radius_m: 0.051
     wheel_rate_deadband_rad_s: 0.02
+    # Speed-IK validity uses feedback hub-position travel versus integrated
+    # commanded wheel travel. It flags bad data but does not abort the unit.
+    hub_travel_validation_enabled: true
+    hub_travel_ratio_min: 0.75
+    hub_travel_ratio_max: 1.25
+    hub_travel_min_command_rad: 0.25
     max_abs_hip_error_rad: 0.35
     max_abs_hip_torque_nm: 400.0
     max_state_age_s: 0.10

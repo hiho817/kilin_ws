@@ -8,7 +8,7 @@ One ROS 2 package for low-level hip-transmission characterization, PID and bound
 - Real actuation requires both `armed:=true` and an explicit real command topic.
 - It sends nothing until `/motor/state` is fresh, then captures current hip and hub feedback as its starting state.
 - New-recording convention is `actual_hip_angle_rad = motor_position + position_diff`.
-- Strategy **1.7.0** commands the raw motor-position reference directly. `position_diff` is not fed back into the position or FF loop.
+- Strategy **1.8.0** commands the raw motor-position reference directly. `position_diff` is not fed back into the position or FF loop.
 - `actual_hip_angle_rad` is still reconstructed and recorded for offline transmission/force analysis. Safety aborts on stale state, non-finite state, motor error code, configured hip-torque bound, or configured raw-motor tracking bound. Abort sends all motors to rest.
 
 The package does not modify `kilin_com_estimator`, the terrain planner, or FAST-LIO2.
@@ -38,7 +38,7 @@ control policy requires a new name/version before an experiment is run.
 
 ### Wheel modes
 
-Strategy **1.7.0** has one explicit `wheel_mode`, recorded in the run manifest
+Strategy **1.8.0** has one explicit `wheel_mode`, recorded in the run manifest
 and trace. Hubs are always `rest` during startup, both hold phases, recovery,
 completion, and abort. Wheel commands are active only during the normal A→B
 and B→A moves.
@@ -48,7 +48,7 @@ and B→A moves.
 | `rest` | Hub motor mode `rest`; no active velocity or torque command. | Baseline hip-only test. |
 | `speed_ik` (or alias `speed`) | Hub velocity is calculated live from the commanded hip trajectory at every control tick. | The wheel follows hip motion kinematically; it is never a fixed speed. The command field uses the established RPM-times-ten unit: `hub.velocity = wheel_rate_rad_s × 60 × 10 / (2π)`. |
 | `torque_assist` (or alias `torque`) | Hub torque magnitude is a fixed signed configuration value. The IK wheel rate chooses the reference direction. | Positive values assist `speed_ik`; negative values oppose it. The torque magnitude is **not** calculated from IK. Outward and inward values may differ and are clamped. |
-| `brake` / `position_hold` | Not implemented in 1.7.0. | A profile using either is rejected before commanding hardware. Position hold will require feedback-captured position before it is introduced. |
+| `brake` / `position_hold` | Not implemented in 1.8.0. | A profile using either is rejected before commanding hardware. Position hold will require feedback-captured position before it is introduced. |
 
 For `speed_ik`, IK supplies both the live wheel-rate magnitude and direction.
 For `torque_assist`, IK supplies **only the reference direction**; the signed
@@ -73,6 +73,36 @@ torque, so the bag and compact trace can be cross-checked after every run.
 | `hip_to_wheel_m` | m / `0.260` | `L` in the live speed-IK relation. |
 | `wheel_radius_m` | m / `0.051` | `R` in the live speed-IK relation. |
 | `wheel_rate_deadband_rad_s` | rad/s / `0.02` | Below this computed wheel rate, the hub is set to rest. |
+| `hub_travel_validation_enabled` | bool / `true` | Enables the speed-IK data-validity check. It records invalid wheel strokes but does not abort the remaining hip unit test. |
+| `hub_travel_ratio_min` | ratio / `0.75` | Smallest allowed feedback-travel/commanded-travel ratio. Must be positive. |
+| `hub_travel_ratio_max` | ratio / `1.25` | Largest allowed feedback-travel/commanded-travel ratio. Must be at least the minimum. |
+| `hub_travel_min_command_rad` | rad / `0.25` | Do not score a segment with less accumulated commanded wheel travel than this. |
+
+#### Speed-IK wheel-travel validity
+
+The hardware feedback currently reports hub velocity as zero even while the hub
+is commanded in velocity mode, so velocity feedback is not used to judge a
+wheel condition. Strategy 1.8.0 instead compares the feedback hub-position
+change with the integrated, sent speed command for every module and every
+A→B/B→A stroke:
+
+$$
+r = \frac{q_{\mathrm{hub,end}}-q_{\mathrm{hub,start}}}
+{\int \dot q_{\mathrm{hub,command}}\,dt}.
+$$
+
+For `wheel_mode: speed_ik`, a stroke is valid only when its commanded travel
+exceeds `hub_travel_min_command_rad` and
+`hub_travel_ratio_min <= r <= hub_travel_ratio_max`. This catches both
+under-travel and an opposite-sign response. It is a **data-quality flag**, not
+a live closed-loop wheel controller and not a hardware fault abort: the runner
+continues the unit test so the evidence remains available, prints a clear
+warning, and marks the affected row in `hub_travel_summary.csv` as `valid: 0`.
+
+Exclude the complete unit-test run from any claim about wheel assistance or
+wheel motion if any of its scored module-strokes is invalid. A run with
+`wheel_mode: rest` or `torque_assist` has no commanded speed integral and is
+not scored by this diagnostic.
 
 ## Complete runner parameter reference
 
@@ -91,7 +121,7 @@ The master runner merges `kilin_hip_batch.defaults` with each test's
 | `run_dir` | string / empty | Evidence folder. Required for an armed direct controller invocation; the helpers set it automatically. |
 | `bag_topics` | string list / six base topics | Topics passed to `ros2 bag record` by `single_runner.py` or `batch_runner.py`. Place it in a direct profile's `ros__parameters`, or master `defaults`; a unit-test override may replace it. The helper removes it before passing the resolved profile to the C++ controller and saves the final list as `bag_topics.txt`. |
 | `strategy_name` | string | Human-readable control/analysis strategy name, recorded in the manifest. |
-| `strategy_version` | numeric string | Revision of that strategy, e.g. `1.7.0`, recorded in the manifest. Use `1.7.0` for this raw-motor, wheel-mode-capable controller; do not reuse `1.0.0` compensated-run profiles. |
+| `strategy_version` | numeric string | Revision of that strategy, e.g. `1.8.0`, recorded in the manifest. Use `1.8.0` for this raw-motor, wheel-mode-capable controller; do not reuse `1.0.0` compensated-run profiles. |
 
 ### Test selection and geometry
 
@@ -115,13 +145,13 @@ The master runner merges `kilin_hip_batch.defaults` with each test's
 | `segment_hold_s` | seconds / `1.0` | Position hold at state B before returning to A. |
 | `kp`, `ki`, `kd` | direct motor gains / `360,0,5` | Hip position-loop gains copied directly into every hip `MotorCmd`. Change only one candidate dimension at a time during PID screening. |
 
-### Near-zero breakaway policy (strategy 1.7.0)
+### Near-zero breakaway policy (strategy 1.8.0)
 
 This is the nonlinear worm-gear breakaway policy. It is disabled by default:
 
     static_breakaway_policy: disabled
 
-Strategy **1.7.0** has no directional gain parameters. Asymmetry comes only
+Strategy **1.8.0** has no directional gain parameters. Asymmetry comes only
 from the separately configured outward and inward schedules $S_d(t_d)$. With
 policy `disabled`, hip FF is zero. With policy enabled, this is the complete
 hip FF during normal A→B and B→A motion.
@@ -255,7 +285,7 @@ G_e(|e|)=\operatorname{clip}_{[0,1]}
 $$
 
 Thus `static_breakaway_error_enable_rad`, `_full_rad`, and `_disable_rad` all
-remain profile parameters. There is no $3u^2-2u^3$ shaping in strategy 1.7.0.
+remain profile parameters. There is no $3u^2-2u^3$ shaping in strategy 1.8.0.
 The velocity gate is a step:
 
 $$
@@ -268,7 +298,7 @@ $$
 
 Here $v_{\mathrm{gate}}$ is `static_breakaway_dwell_speed_rad_s`. A zero gate
 threshold disables this step gate. There is no exponential velocity fade or
-velocity-fade power in strategy 1.7.0. $G_q$ is the optional angle factor
+velocity-fade power in strategy 1.8.0. $G_q$ is the optional angle factor
 described below.
 
 The equation is evaluated only when the commanded raw-motor reference lies in
@@ -435,7 +465,7 @@ negative value opposes it. This calculation never uses `position_diff`.
 | Parameter | Type / default | Exact effect |
 | --- | --- | --- |
 | `max_state_age_s` | seconds / `0.10` | Maximum acceptable age of `/motor/state`. A stale state rests all motors and aborts. |
-| `max_abs_hip_error_rad` | radians / `0.35` | Largest allowed measured-motor-minus-commanded-motor error. A breach aborts. It is deliberately not based on reconstructed actual hip angle in strategy 1.7.0. |
+| `max_abs_hip_error_rad` | radians / `0.35` | Largest allowed measured-motor-minus-commanded-motor error. A breach aborts. It is deliberately not based on reconstructed actual hip angle in strategy 1.8.0. |
 | `max_abs_hip_torque_nm` | feedback units / `400` | Largest allowed absolute hip torque feedback value. A breach aborts. Confirm feedback units on hardware before changing it. |
 
 The runner logs phase changes to the terminal and `launch.log`: startup move,
@@ -444,6 +474,10 @@ complete, or aborted. `command_state_trace.csv` records
 the controller pair `commanded_motor_rad`/`motor_position_rad`, alongside
 `position_diff_rad` and the observation-only reconstruction
 `actual_hip_angle_rad = motor_position + position_diff`.
+For speed-IK runs it also records hub position, velocity, torque, mode, error,
+and the evolving command/feedback travel ratio. The final per-stroke evidence
+is `hub_travel_summary.csv`; use its `valid` column before analysing a wheel
+condition.
 
 On every abort, the terminal and `launch.log` identify the module, phase,
 reason, measured value, and configured limit where applicable. The same reason
@@ -509,7 +543,7 @@ Dry run/default preview:
 ros2 launch kilin_hip_characterization characterization.launch.py
 ```
 
-For a real run, first copy and review a profile and create the run directory. Then explicitly provide `armed:=true`, `command_topic:=/motor/command`, and `run_dir:=...`. In strategy 1.7.0, `speed_ik` and `torque_assist` are published only during moving hip phases; hubs are rest otherwise.
+For a real run, first copy and review a profile and create the run directory. Then explicitly provide `armed:=true`, `command_topic:=/motor/command`, and `run_dir:=...`. In strategy 1.8.0, `speed_ik` and `torque_assist` are published only during moving hip phases; hubs are rest otherwise.
 
 ## Offline analysis
 
