@@ -27,6 +27,7 @@
 #include "kilin_msgs/msg/stair_phase_stamped.hpp"
 #include "kilin_msgs/msg/stair_terrain_stamped.hpp"
 #include "kilin_msgs/msg/trigger_stamped.hpp"
+#include "kilin_stair_controller/com_inverse.hpp"
 #include "kilin_stair_controller/support_geometry.hpp"
 #include "kinova_ptp_interfaces/action/joint_ptp.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -88,6 +89,11 @@ public:
       "com_min_alpha_by_phase", std::vector<double>{});
     declare_parameter<double>("com_alpha_step", 0.05);
     declare_parameter<double>("com_safe_hold_sec", 0.3);
+    declare_parameter<bool>("com_use_inverse_initial_alpha", false);
+    declare_parameter<double>("com_inverse_target_margin_m", 0.014);
+    declare_parameter<bool>("com_inverse_target_relative_to_release", false);
+    declare_parameter<double>("com_inverse_target_margin_offset_m", 0.001);
+    declare_parameter<int>("com_inverse_min_refinement_steps", 0);
     declare_parameter<double>("amr_yaw_in_world_deg", 0.0);
     declare_parameter<double>("arm_base_yaw_offset_deg", 0.0);
     const std::vector<double> default_standard_pose =
@@ -151,6 +157,16 @@ public:
     }
     com_alpha_step_ = get_parameter("com_alpha_step").as_double();
     com_safe_hold_sec_ = get_parameter("com_safe_hold_sec").as_double();
+    com_use_inverse_initial_alpha_ =
+      get_parameter("com_use_inverse_initial_alpha").as_bool();
+    com_inverse_target_margin_m_ =
+      get_parameter("com_inverse_target_margin_m").as_double();
+    com_inverse_target_relative_to_release_ =
+      get_parameter("com_inverse_target_relative_to_release").as_bool();
+    com_inverse_target_margin_offset_m_ =
+      get_parameter("com_inverse_target_margin_offset_m").as_double();
+    com_inverse_min_refinement_steps_ =
+      get_parameter("com_inverse_min_refinement_steps").as_int();
     amr_yaw_in_world_rad_ = get_parameter("amr_yaw_in_world_deg").as_double() * M_PI / 180.0;
     arm_base_yaw_offset_rad_ =
       get_parameter("arm_base_yaw_offset_deg").as_double() * M_PI / 180.0;
@@ -189,6 +205,20 @@ public:
         com_min_alpha_by_phase_.begin(), com_min_alpha_by_phase_.end(),
         [](double alpha) {return !std::isfinite(alpha) || alpha < 0.0 || alpha > 1.0;}) ||
       com_alpha_step_ <= 0.0 || com_alpha_step_ > 1.0 || com_safe_hold_sec_ < 0.0 ||
+      (com_use_inverse_initial_alpha_ &&
+      ((!com_inverse_target_relative_to_release_ &&
+      (!std::isfinite(com_inverse_target_margin_m_) ||
+      com_inverse_target_margin_m_<0.0 ||
+      com_inverse_target_margin_m_>
+      * std::min_element(
+        com_safe_margin_by_phase_m_.begin(), com_safe_margin_by_phase_m_.end()))) ||
+      (com_inverse_target_relative_to_release_ &&
+      (!std::isfinite(com_inverse_target_margin_offset_m_) ||
+      com_inverse_target_margin_offset_m_<0.0 ||
+      com_inverse_target_margin_offset_m_>
+      * std::min_element(
+        com_safe_margin_by_phase_m_.begin(), com_safe_margin_by_phase_m_.end()))))) ||
+      com_inverse_min_refinement_steps_ < 0 ||
       !std::isfinite(amr_yaw_in_world_rad_) || !std::isfinite(arm_base_yaw_offset_rad_))
     {
       throw std::runtime_error(
@@ -263,7 +293,9 @@ public:
         get_logger(),
         "COM input: %s, safe margins P1-P4: [%.1f, %.1f, %.1f, %.1f] mm, "
         "minimum alphas: [%.2f, %.2f, %.2f, %.2f], alpha step: %.3f, AMR yaw: %.2f deg, "
-        "arm base yaw offset: %.2f deg",
+        "arm base yaw offset: %.2f deg, inverse initial alpha: %s, "
+        "inverse target margins P1-P4: [%.1f, %.1f, %.1f, %.1f] mm, "
+        "mandatory refinement steps: %d",
         balance_state_topic_.c_str(),
         com_safe_margin_by_phase_m_[0] * 1000.0,
         com_safe_margin_by_phase_m_[1] * 1000.0,
@@ -272,7 +304,13 @@ public:
         com_min_alpha_by_phase_[0], com_min_alpha_by_phase_[1],
         com_min_alpha_by_phase_[2], com_min_alpha_by_phase_[3], com_alpha_step_,
         amr_yaw_in_world_rad_ * 180.0 / M_PI,
-        arm_base_yaw_offset_rad_ * 180.0 / M_PI);
+        arm_base_yaw_offset_rad_ * 180.0 / M_PI,
+        com_use_inverse_initial_alpha_ ? "enabled" : "disabled",
+        inverse_target_margin_for_release(com_safe_margin_by_phase_m_[0]) * 1000.0,
+        inverse_target_margin_for_release(com_safe_margin_by_phase_m_[1]) * 1000.0,
+        inverse_target_margin_for_release(com_safe_margin_by_phase_m_[2]) * 1000.0,
+        inverse_target_margin_for_release(com_safe_margin_by_phase_m_[3]) * 1000.0,
+        com_inverse_min_refinement_steps_);
     }
   }
 
@@ -686,6 +724,10 @@ private:
     previous_arm_phase_ = previous_phase;
     closed_loop_standard_pending_ = closed_loop_arm_ && phase > 0 && previous_phase != 0;
     closed_loop_waiting_for_standard_ = false;
+    closed_loop_waiting_for_joint1_ = false;
+    closed_loop_inverse_pending_ = false;
+    inverse_extension_active_ = false;
+    inverse_refinement_steps_completed_ = 0;
     waiting_for_arm_ = true;
     arm_reached_ = false;
     arm_goal_sent_ = false;
@@ -779,6 +821,9 @@ private:
       publish_stair_phase(current_arm_waypoint().name, true);
       return true;
     }
+    if (closed_loop_inverse_pending_) {
+      return prepare_inverse_extension_waypoints();
+    }
     const auto stability = latest_stability(true);
     if (!stability) {
       RCLCPP_WARN_THROTTLE(
@@ -831,6 +876,18 @@ private:
     auto rotated_pose = standard_pose_;
     rotated_pose[0] = target_j1;
     arm_waypoints_.push_back({"rotate-joint-1", std::move(rotated_pose), 0.0});
+    if (com_use_inverse_initial_alpha_) {
+      closed_loop_waiting_for_joint1_ = true;
+      pending_arm_target_ = arm_waypoints_.front().positions;
+      publish_stair_phase(current_arm_waypoint().name, true);
+      RCLCPP_INFO(
+        get_logger(),
+        "Phase %d initial margin %.3f mm; rotating J1 to %.3f deg before "
+        "recomputing COM and inverse alpha.",
+        active_arm_phase_, stability->signed_margin * 1000.0,
+        target_j1 * 180.0 / M_PI);
+      return true;
+    }
     for (double alpha = com_alpha_step_; alpha < 1.0 - 1e-9; alpha += com_alpha_step_) {
       arm_waypoints_.push_back(
         {"extend-alpha-" + std::to_string(alpha), extension_pose(target_j1, alpha), alpha});
@@ -845,6 +902,125 @@ private:
       active_arm_phase_, stability->signed_margin * 1000.0,
       stability->correction_distance * 1000.0, stability->direction.x,
       stability->direction.y, target_j1 * 180.0 / M_PI);
+    return true;
+  }
+
+  kilin_stair_controller::inverse::Matrix3 base_to_output_rotation() const
+  {
+    if (!latest_balance_state_.orientation_valid) {
+      const double cosine = std::cos(amr_yaw_in_world_rad_);
+      const double sine = std::sin(amr_yaw_in_world_rad_);
+      return {{{cosine, -sine, 0.0}, {sine, cosine, 0.0}, {0.0, 0.0, 1.0}}};
+    }
+
+    const auto & quaternion = latest_balance_state_.base_to_output_rotation;
+    const double norm = std::sqrt(
+      quaternion.x * quaternion.x + quaternion.y * quaternion.y +
+      quaternion.z * quaternion.z + quaternion.w * quaternion.w);
+    if (!std::isfinite(norm) || norm < 1e-9) {
+      throw std::runtime_error("balance orientation quaternion is invalid");
+    }
+    const double x = quaternion.x / norm;
+    const double y = quaternion.y / norm;
+    const double z = quaternion.z / norm;
+    const double w = quaternion.w / norm;
+    return {{{
+      1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w),
+      2.0 * (x * z + y * w)},
+      {2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z),
+        2.0 * (y * z - x * w)},
+      {2.0 * (x * z - y * w), 2.0 * (y * z + x * w),
+        1.0 - 2.0 * (x * x + y * y)}}};
+  }
+
+  bool prepare_inverse_extension_waypoints()
+  {
+    if (!have_balance_state_ || last_balance_receive_time_ <= inverse_balance_cutoff_time_) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Waiting for a new post-J1 balance sample before phase %d inverse alpha.",
+        active_arm_phase_);
+      return false;
+    }
+    const auto release_stability = latest_stability(true);
+    if (!release_stability) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Waiting for a post-J1 balance sample before phase %d inverse alpha.",
+        active_arm_phase_);
+      return false;
+    }
+    closed_loop_inverse_pending_ = false;
+    if (release_stability->inside_safe_region) {
+      arm_reached_ = true;
+      RCLCPP_INFO(
+        get_logger(),
+        "Phase %d is safe after J1 rotation at the %.3f mm release margin; "
+        "alpha remains zero.",
+        active_arm_phase_, active_com_safe_margin() * 1000.0);
+      return true;
+    }
+    const double inverse_target_margin = active_inverse_target_margin();
+    const auto inverse_stability = latest_stability(true, inverse_target_margin);
+    if (!inverse_stability) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Waiting for phase %d geometry at the inverse target margin.",
+        active_arm_phase_);
+      return false;
+    }
+
+    const double target_j1 = held_arm_pose_[0];
+    const double extension_angle_base = arm_base_yaw_offset_rad_ - target_j1;
+    const kilin_stair_controller::geometry::Point2 extension_direction_base{
+      std::cos(extension_angle_base), std::sin(extension_angle_base)};
+    kilin_stair_controller::inverse::Result inverse_result;
+    try {
+      inverse_result = kilin_stair_controller::inverse::solve_minimum_alpha(
+        {latest_balance_state_.com.x, latest_balance_state_.com.y},
+        inverse_stability->safe_polygon, extension_direction_base, base_to_output_rotation(),
+        active_com_min_alpha());
+    } catch (const std::exception & error) {
+      arm_request_failed_ = true;
+      arm_failure_message_ = std::string("inverse alpha failed: ") + error.what();
+      return false;
+    }
+
+    // The inverse target may already contain the current COM even though the
+    // measured release condition is not satisfied. Start at alpha zero in that
+    // case and let the mandatory feedback refinement move the arm.
+    const double initial_alpha = inverse_result.already_safe ?
+      0.0 : std::clamp(inverse_result.alpha, 0.0, 1.0);
+    arm_waypoints_.push_back(
+      {"extend-initial-alpha-" + std::to_string(initial_alpha),
+        extension_pose(target_j1, initial_alpha), initial_alpha});
+    for (double alpha = initial_alpha + com_alpha_step_; alpha < 1.0 - 1e-9;
+      alpha += com_alpha_step_)
+    {
+      arm_waypoints_.push_back(
+        {"fine-tune-alpha-" + std::to_string(alpha),
+          extension_pose(target_j1, alpha), alpha, true});
+    }
+    if (initial_alpha < 1.0 - 1e-9) {
+      arm_waypoints_.push_back(
+        {"fine-tune-alpha-1.000000", extension_pose(target_j1, 1.0), 1.0, true});
+    }
+    inverse_extension_active_ = true;
+    inverse_refinement_steps_completed_ = 0;
+    active_arm_waypoint_ = 0;
+    pending_arm_target_ = arm_waypoints_.front().positions;
+    arm_goal_wait_start_time_ = get_clock()->now();
+    publish_stair_phase(current_arm_waypoint().name, true);
+    RCLCPP_INFO(
+      get_logger(),
+      "Phase %d post-J1 correction %.3f mm; inverse %.3f mm target alpha %.6f "
+      "(predicted target margin %.3f mm, reachable=%s). Fine-tune step %.3f; "
+      "at least %d refinement step(s) required before %.3f mm release.",
+      active_arm_phase_, release_stability->correction_distance * 1000.0,
+      inverse_target_margin * 1000.0, initial_alpha,
+      inverse_result.predicted_safe_margin * 1000.0,
+      inverse_result.reachable ? "true" : "false", com_alpha_step_,
+      com_inverse_min_refinement_steps_, active_com_safe_margin() * 1000.0);
     return true;
   }
 
@@ -866,6 +1042,20 @@ private:
     return com_safe_margin_by_phase_m_.at(static_cast<std::size_t>(active_arm_phase_ - 1));
   }
 
+  double inverse_target_margin_for_release(double release_margin) const
+  {
+    if (com_inverse_target_relative_to_release_) {
+      return kilin_stair_controller::inverse::feedforward_target_margin(
+        release_margin, com_inverse_target_margin_offset_m_);
+    }
+    return com_inverse_target_margin_m_;
+  }
+
+  double active_inverse_target_margin() const
+  {
+    return inverse_target_margin_for_release(active_com_safe_margin());
+  }
+
   double active_com_min_alpha() const
   {
     if (active_arm_phase_ < 1 || active_arm_phase_ > 4) {
@@ -875,7 +1065,7 @@ private:
   }
 
   std::optional<kilin_stair_controller::geometry::StabilityResult> latest_stability(
-    bool require_recent)
+    bool require_recent, std::optional<double> safe_margin_override = std::nullopt)
   {
     if (!have_balance_state_) {
       return std::nullopt;
@@ -908,7 +1098,7 @@ private:
       }
       return kilin_stair_controller::geometry::evaluate_stability(
         {latest_balance_state_.com.x, latest_balance_state_.com.y}, wheels,
-        active_arm_phase_, active_com_safe_margin());
+        active_arm_phase_, safe_margin_override.value_or(active_com_safe_margin()));
     } catch (const std::exception & error) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000, "Invalid balance geometry: %s", error.what());
@@ -1075,6 +1265,9 @@ private:
           current_arm_waypoint().name.c_str(),
           wrapped_result.result->final_max_joint_error);
         held_arm_pose_ = current_arm_waypoint().positions;
+        if (current_arm_waypoint().inverse_refinement) {
+          ++inverse_refinement_steps_completed_;
+        }
 
         if (closed_loop_arm_ && active_arm_phase_ > 0 &&
           closed_loop_waiting_for_standard_ && current_arm_waypoint().alpha < 0.0)
@@ -1086,6 +1279,24 @@ private:
           arm_goal_wait_start_time_ = get_clock()->now();
           RCLCPP_INFO(
             get_logger(), "Standard shape reached; recomputing phase %d COM correction.",
+            active_arm_phase_);
+          prepare_closed_loop_waypoints();
+          return;
+        }
+
+        if (closed_loop_arm_ && active_arm_phase_ > 0 &&
+          closed_loop_waiting_for_joint1_ && current_arm_waypoint().alpha == 0.0)
+        {
+          closed_loop_waiting_for_joint1_ = false;
+          closed_loop_inverse_pending_ = true;
+          inverse_balance_cutoff_time_ = last_balance_receive_time_;
+          arm_waypoints_.clear();
+          active_arm_waypoint_ = 0;
+          arm_goal_sent_ = false;
+          arm_goal_wait_start_time_ = get_clock()->now();
+          RCLCPP_INFO(
+            get_logger(),
+            "Joint 1 reached at alpha zero; recomputing phase %d COM and inverse alpha.",
             active_arm_phase_);
           prepare_closed_loop_waypoints();
           return;
@@ -1105,7 +1316,13 @@ private:
             stability->inside_safe_region ? "true" : "false");
           const bool minimum_extension_reached =
             current_arm_waypoint().alpha + 1e-9 >= active_com_min_alpha();
-          if (stability->inside_safe_region && minimum_extension_reached) {
+          const bool at_full_extension = current_arm_waypoint().alpha >= 1.0 - 1e-9;
+          const bool inverse_refinement_reached =
+            !inverse_extension_active_ || at_full_extension ||
+            inverse_refinement_steps_completed_ >= com_inverse_min_refinement_steps_;
+          if (stability->inside_safe_region && minimum_extension_reached &&
+            inverse_refinement_reached)
+          {
             safe_hold_pending_ = true;
             safe_hold_start_time_ = get_clock()->now();
           } else {
@@ -1115,6 +1332,17 @@ private:
                 "Phase %d is geometrically safe but alpha %.3f is below minimum %.3f; "
                 "continuing extension.",
                 active_arm_phase_, current_arm_waypoint().alpha, active_com_min_alpha());
+            }
+            if (stability->inside_safe_region && minimum_extension_reached &&
+              !inverse_refinement_reached)
+            {
+              RCLCPP_INFO(
+                get_logger(),
+                "Phase %d reached the %.3f mm release margin, but inverse refinement "
+                "%d/%d is incomplete; continuing by alpha %.3f.",
+                active_arm_phase_, active_com_safe_margin() * 1000.0,
+                inverse_refinement_steps_completed_, com_inverse_min_refinement_steps_,
+                com_alpha_step_);
             }
             advance_closed_loop_waypoint();
           }
@@ -1163,6 +1391,7 @@ private:
     std::string name;
     std::vector<double> positions;
     double alpha{-1.0};
+    bool inverse_refinement{false};
   };
 
   const ArmWaypoint & current_arm_waypoint() const
@@ -1329,6 +1558,11 @@ private:
   std::array<double, 4> com_min_alpha_by_phase_{};
   double com_alpha_step_{};
   double com_safe_hold_sec_{};
+  bool com_use_inverse_initial_alpha_{false};
+  double com_inverse_target_margin_m_{};
+  bool com_inverse_target_relative_to_release_{false};
+  double com_inverse_target_margin_offset_m_{};
+  int com_inverse_min_refinement_steps_{};
   double amr_yaw_in_world_rad_{};
   double arm_base_yaw_offset_rad_{};
   std::vector<double> standard_pose_;
@@ -1359,6 +1593,7 @@ private:
   rclcpp::Time arm_wait_start_time_;
   rclcpp::Time arm_goal_wait_start_time_;
   rclcpp::Time last_balance_receive_time_;
+  rclcpp::Time inverse_balance_cutoff_time_;
   rclcpp::Time safe_hold_start_time_;
   bool started_{false};
   bool start_requested_{false};
@@ -1369,6 +1604,10 @@ private:
   bool safe_hold_pending_{false};
   bool closed_loop_standard_pending_{false};
   bool closed_loop_waiting_for_standard_{false};
+  bool closed_loop_waiting_for_joint1_{false};
+  bool closed_loop_inverse_pending_{false};
+  bool inverse_extension_active_{false};
+  int inverse_refinement_steps_completed_{0};
   bool have_balance_state_{false};
   std::string arm_failure_message_;
   bool finished_{false};

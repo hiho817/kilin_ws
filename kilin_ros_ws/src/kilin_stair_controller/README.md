@@ -64,8 +64,21 @@ mode because the same geometry calculation is performed inside this controller.
 For each nonzero phase, playback holds the complete last Kilin command. The arm
 starts from its standard shape, rotates joint 1 toward the shortest correction,
 then interpolates joints 2--7 from `standard_pose_deg` toward
-`full_extension_pose_deg` in `com_alpha_step` increments. After every PTP result,
-the latest support geometry is evaluated again. Playback resumes only after the
+`full_extension_pose_deg` in `com_alpha_step` increments. When
+`com_use_inverse_initial_alpha` is enabled, the controller first rotates joint 1
+at alpha zero, recomputes the measured COM, and uses the fitted URDF/FK Delta-COM
+model to command a model-based initial alpha. If the measured margin is still
+insufficient, it continues with the existing `com_alpha_step` increments.
+When `com_inverse_target_relative_to_release` is true, the feedforward target is
+the active phase release margin minus `com_inverse_target_margin_offset_m`.
+Hardware inverse experiments use a 1 mm offset, producing FL/FR/RL/RR targets
+of 24/22/14/24 mm. The older absolute `com_inverse_target_margin_m` remains
+available when relative mode is false. `com_inverse_min_refinement_steps`
+requires a minimum number of measured fine-tune steps before release. Full
+extension is exempt from the mandatory-step count, so a phase such as RL can
+still release when it satisfies its configured safe margin even if no further
+alpha step is possible. After every PTP result, the latest support geometry is
+evaluated again. Playback resumes only after the
 margin is at least the current entry in `com_safe_margin_by_phase_m` (FL, FR,
 RL, RR), or the backward-compatible `com_safe_margin_m` fallback when the array
 is empty, for `com_safe_hold_sec` continuously. If
@@ -76,10 +89,12 @@ PTP goal fails, playback stops.
 FR, RL, and RR. Once COM correction starts, playback resumes only when both the
 phase's minimum alpha and its safe margin are satisfied.
 
-In simulation, input positions and COM are expected in the world frame.
-`amr_yaw_in_world_deg` rotates that world correction into the AMR frame before
-J1 is selected. Keep it at zero while AMR +X and world +X are aligned. Hardware
-instead uses the orientation quaternion described below.
+In simulation, input positions and COM are expected in the world frame. The
+Isaac balance-state publisher supplies the simulated base-to-world orientation,
+which is used as the IMU-equivalent attitude for both J1 direction selection and
+the model-based Delta-COM projection. `amr_yaw_in_world_deg` is only the fallback
+when that orientation is unavailable; keep it at zero while AMR +X and world +X
+are aligned.
 
 `arm_base_yaw_offset_deg` then rotates the AMR-frame correction into the Kinova
 base mounting frame. Use `0.0` when Kinova base +X points toward AMR +X, as in
@@ -282,6 +297,18 @@ ros2 launch kilin_stair_controller hardware_stair.launch.py \
   csv_path:=$HOME/kilin_ws/csv/stairs_v3/stair_35_10_hardware.csv
 ```
 
+The inverse hardware experiment has a separate launch and configuration, so the
+incremental hardware baseline remains available unchanged:
+
+```bash
+ros2 launch kilin_stair_controller hardware_inverse_stair.launch.py \
+  csv_path:=$HOME/kilin_ws/csv/stairs_v3/stair_35_10_hardware.csv
+```
+
+At startup, confirm that the controller reports inverse initial alpha enabled
+and inverse target margins `[24.0, 22.0, 14.0, 24.0]` mm before calling the
+start service.
+
 Launching does not move the robot. Verify fresh inputs and gravity-aligned
 output, then explicitly start:
 
@@ -291,6 +318,15 @@ ros2 topic hz /joint_states
 ros2 topic echo /kilin/stair_terrain --once
 ros2 topic echo /kilin/balance_state --once
 ros2 service call /kilin/start_stair std_srvs/srv/Trigger "{}"
+```
+
+Record the hardware inverse experiment without `/imu`:
+
+```bash
+ros2 bag record -o inverse_refine_hw_35_10_log01 \
+  /kilin/trigger /kilin/stair_phase /kilin/stability_state \
+  /kilin/balance_state /kilin/stair_terrain \
+  /motor/state /joint_states /kilin/motor_cmd_raw
 ```
 
 The start service rejects a missing `/kilin/motor_cmd_raw` subscriber (the

@@ -10,6 +10,7 @@ config/
 !kilin_ros_ws/src/kilin_stair_controller/config/
 kilin_ros_ws/src/kilin_stair_controller/config/*
 !kilin_ros_ws/src/kilin_stair_controller/config/stair_controller_hardware.yaml
+!kilin_ros_ws/src/kilin_stair_controller/config/stair_controller_hardware_inverse.yaml
 !kilin_ros_ws/src/kilin_com_estimator/config/
 kilin_ros_ws/src/kilin_com_estimator/config/*
 !kilin_ros_ws/src/kilin_com_estimator/config/hardware_com_estimator.yaml

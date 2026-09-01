@@ -21,20 +21,19 @@ kilin_stair_controller:
     require_command_subscriber: true
 
     com_safe_margin_m: 0.015
-    # FL, FR, RL, RR swing phases. Hardware tests require 25 mm for FL/RR;
-    # RL remains feasible only at 15 mm and FR keeps the validated 20 mm.
+    # FL, FR, RL, RR swing phases. Preserve the existing hardware release gates.
     com_safe_margin_by_phase_m: [0.025, 0.023, 0.015, 0.025]
-    # RL tipped after early release at 0.70; the stable first RR lift required 0.75.
+    # Preserve the empirically selected RL/RR minimum extension constraints.
     com_min_alpha_by_phase: [0.0, 0.0, 0.90, 0.75]
     com_alpha_step: 0.05
     com_safe_hold_sec: 0.3
-    # Keep hardware on the validated incremental controller until simulation
-    # validation of the model-based initial alpha is complete.
-    com_use_inverse_initial_alpha: false
-    # When inverse is enabled, target each phase's release margin minus 1 mm.
-    # The absolute target remains available only as a backward-compatible mode.
+
+    # Hardware inverse experiment: solve to 1 mm below each phase's release
+    # margin, then retain measured 0.05-alpha refinement and the safe hold gate.
+    com_use_inverse_initial_alpha: true
     com_inverse_target_relative_to_release: true
     com_inverse_target_margin_offset_m: 0.001
+    # Backward-compatible absolute target; ignored while relative mode is true.
     com_inverse_target_margin_m: 0.014
     com_inverse_min_refinement_steps: 0
     amr_yaw_in_world_deg: 0.0
@@ -42,7 +41,7 @@ kilin_stair_controller:
     # Hardware Kinova base is mounted backward: J1=180 deg faces AMR forward.
     arm_base_yaw_offset_deg: 180.0
     standard_pose_deg: [180.0, -85.94, 0.0, 147.0, 0.0, 22.92, 0.0]
-    full_extension_pose_deg: [180.0, 90.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    full_extension_pose_deg: [180.0, 90.0, 0.0, 0.0, 0.0, 0.0]
     front_left_pose_deg: [135.0, 90.0, 0.0, -40.0, 0.0, 90.0, 0.0]
     front_right_pose_deg: [-135.0, 90.0, 0.0, -40.0, 0.0, 90.0, 0.0]
     rear_left_pose_deg: [45.0, 100.0, 0.0, 0.0, 0.0, 90.0, 0.0]

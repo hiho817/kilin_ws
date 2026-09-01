@@ -54,6 +54,12 @@ if(BUILD_TESTING)
     target_include_directories(test_support_geometry PRIVATE include)
   endif()
 
+  ament_add_gtest(test_com_inverse test/test_com_inverse.cpp)
+  if(TARGET test_com_inverse)
+    target_compile_features(test_com_inverse PUBLIC cxx_std_17)
+    target_include_directories(test_com_inverse PRIVATE include)
+  endif()
+
   ament_add_pytest_test(test_generate_stair_csv test/test_generate_stair_csv.py)
 endif()
 
