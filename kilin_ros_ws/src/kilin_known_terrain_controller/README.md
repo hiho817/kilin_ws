@@ -172,9 +172,12 @@ mode before and after active motion. Planner hip angles are sent directly to Isa
 motion limited to the measured actuator limit of 0.4 revolutions/s
 (144 degrees/s), matching the Version 2 planner constraint.
 
-If the robot is already in that exact nominal stance, skip the transition with
-`auto_initialize_stance:=false` in the launch command. Fresh hip feedback is
-still required; this option only skips the commanded repositioning step.
+If the robot is already in a manually verified physical nominal stance, skip
+the transition with `known_ramp_auto_initialize_stance:=false`. Fresh hip
+feedback is still required; this option only skips the commanded repositioning
+step. The subsequent motor-side acceptance threshold is
+`known_ramp_max_initial_hip_error_deg` (default 5.0 degrees). This is useful
+when the physical 45-degree posture has a known `position_diff`.
 
 `mode:=planner_posture_test` uses that same planner and direct hip mapping at a
 stationary flat-ground position for four seconds. All hub motors remain in REST
@@ -467,8 +470,8 @@ arguments.  The generic launch also has the two arguments marked `generic`.
 | `ramp.second.height_m`, `ramp.second.start_x_m` | `0.08`, `2.70` m | non-negative/finite m | Second-ramp height and start. | If enabled. |
 | `ramp.second.up_ramp_length_m`, `ramp.second.deck_length_m`, `ramp.second.down_ramp_length_m` | `0.30`, `0.35`, `0.30` m | positive m | Second-ramp segment lengths. | If enabled. |
 | `ramp.second.track_center_y_m` | `-0.25` m | finite m | Second-ramp lateral centre; width is shared from `ramp.track_width_m`. | If enabled. |
-| `known_ramp.max_initial_hip_error_deg` | `5.0` deg | non-negative deg | Refuses planner mode if feedback differs too far from nominal stance. | No without safety review. |
-| `known_ramp.auto_initialize_stance` | `true` | `true`, `false` | Initializes nominal stance before known-ramp planning. | Set `false` only after verified nominal stance. |
+| `known_ramp.max_initial_hip_error_deg` | `5.0` deg | non-negative deg | Motor-side acceptance tolerance when planner mode starts; launch name `known_ramp_max_initial_hip_error_deg`. | Set explicitly for a documented manually initialized stance. |
+| `known_ramp.auto_initialize_stance` | `true` | `true`, `false` | Initializes nominal stance before known-ramp planning; launch name `known_ramp_auto_initialize_stance`. | Set `false` only after verified physical nominal stance. |
 | `known_ramp.hip_rate_limit_deg_s` | `144` deg/s | positive deg/s | Applied hip interpolation rate limit. | No without actuator evidence. |
 | `known_ramp.command_smoothing_s` | `0.20` s | non-negative seconds | Smooth transition to each new planner target. | No without tracking evidence. |
 | `planner_posture_test.duration_s` | `4.0` s | positive seconds | Stationary planner-posture test duration. | Only that mode. |

@@ -56,6 +56,22 @@ def generate_launch_description():
             DeclareLaunchArgument("vicon_trigger_test_duration_s", default_value="3.0"),
             DeclareLaunchArgument("debug_publish", default_value="false"),
             DeclareLaunchArgument(
+                "known_ramp_auto_initialize_stance",
+                default_value="true",
+                description=(
+                    "Move motor-side hips to the nominal stance before planning. "
+                    "Set false only after manually verifying the physical stance."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "known_ramp_max_initial_hip_error_deg",
+                default_value="5.0",
+                description=(
+                    "Maximum allowed motor-side difference from nominal when "
+                    "automatic stance initialization is disabled."
+                ),
+            ),
+            DeclareLaunchArgument(
                 "angle_diff_compensation_gain",
                 default_value="0.0",
                 description="Experimental outward position_diff compensation gain; zero disables it.",
@@ -125,6 +141,12 @@ def generate_launch_description():
                             "vicon_trigger_test_duration_s"
                         ),
                         "debug_publish_enabled": LaunchConfiguration("debug_publish"),
+                        "known_ramp.auto_initialize_stance": LaunchConfiguration(
+                            "known_ramp_auto_initialize_stance"
+                        ),
+                        "known_ramp.max_initial_hip_error_deg": LaunchConfiguration(
+                            "known_ramp_max_initial_hip_error_deg"
+                        ),
                         "angle_diff_compensation.gain": LaunchConfiguration(
                             "angle_diff_compensation_gain"
                         ),

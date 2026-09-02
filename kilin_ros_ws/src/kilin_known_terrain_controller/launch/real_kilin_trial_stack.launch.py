@@ -92,6 +92,11 @@ def _trial_actions(context):
         }
     )
     for config_key, launch_key in (
+        ("known_ramp.auto_initialize_stance", "known_ramp_auto_initialize_stance"),
+        (
+            "known_ramp.max_initial_hip_error_deg",
+            "known_ramp_max_initial_hip_error_deg",
+        ),
         ("angle_diff_compensation.gain", "angle_diff_compensation_gain"),
         (
             "angle_diff_compensation.maximum_abs_rad",

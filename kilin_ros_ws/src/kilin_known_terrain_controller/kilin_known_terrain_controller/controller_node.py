@@ -1339,6 +1339,7 @@ class KnownTerrainController(Node):
         with self._lock:
             self._measured_hips = hips
             self._last_joint_state_time = self.get_clock().now()
+            self._warned_waiting_for_feedback = False
 
     def _motor_state_callback(self, message: MotorStateStamped) -> None:
         """Use the shared Kilin motor-state contract: A/B/C/D = FL/FR/RL/RR."""
@@ -1377,6 +1378,7 @@ class KnownTerrainController(Node):
                 previous_outward, observed_outward
             )
             self._last_joint_state_time = self.get_clock().now()
+            self._warned_waiting_for_feedback = False
 
     def stop(self) -> None:
         if self._vicon_trigger_test_start_timer is not None:
