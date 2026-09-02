@@ -48,11 +48,14 @@ class CampaignRunner final : public rclcpp::Node {
     state_topic_ = declare_parameter<std::string>("state_topic", "/motor/state");
     run_dir_ = declare_parameter<std::string>("run_dir", "");
     strategy_name_ = declare_parameter<std::string>("strategy_name", "phase_a_two_state_baseline");
-    strategy_version_ = declare_parameter<std::string>("strategy_version", "1.8.0");
+    strategy_version_ = declare_parameter<std::string>("strategy_version", "1.9.0");
     active_modules_ = declare_parameter<std::vector<std::string>>("active_modules", {"A", "B"});
     repetitions_ = declare_parameter<int>("repetitions", 3);
+    motion_mode_ = declare_parameter<std::string>("motion_mode", "two_state_cycle");
     state_a_deg_ = declare_parameter<double>("state_a_deg", 0.0);
     state_b_deg_ = declare_parameter<double>("state_b_deg", 45.0);
+    module_state_a_deg_ = declare_parameter<std::vector<double>>("module_state_a_deg", std::vector<double>());
+    module_state_b_deg_ = declare_parameter<std::vector<double>>("module_state_b_deg", std::vector<double>());
     startup_speed_ = declare_parameter<double>("startup_move_speed_rad_s", 0.1);
     recovery_deg_ = declare_parameter<double>("recovery_position_deg", 0.0);
     recovery_speed_ = declare_parameter<double>("recovery_move_speed_rad_s", 0.1);
@@ -111,8 +114,10 @@ class CampaignRunner final : public rclcpp::Node {
         static_breakaway_angle_mode_ == "sine";
     const bool known_velocity_source = static_breakaway_velocity_source_ == "filtered" ||
         static_breakaway_velocity_source_ == "raw";
+    const bool per_module_motion = motion_mode_ == "per_module_two_state_cycle";
+    const bool known_motion_mode = motion_mode_ == "two_state_cycle" || per_module_motion;
     if (repetitions_ < 1 || startup_speed_ <= 0.0 || recovery_speed_ <= 0.0 || hip_speed_ <= 0.0 ||
-        !known_wheel_mode ||
+        !known_wheel_mode || !known_motion_mode ||
         max_wheel_torque_ < 0.0 || hip_to_wheel_m_ <= 0.0 || wheel_radius_m_ <= 0.0 ||
         wheel_rate_deadband_rad_s_ < 0.0 || !known_breakaway_policy || !known_angle_mode || !known_velocity_source ||
         hub_travel_ratio_min_ <= 0.0 || hub_travel_ratio_max_ < hub_travel_ratio_min_ ||
@@ -129,13 +134,17 @@ class CampaignRunner final : public rclcpp::Node {
         static_breakaway_angle_min_deg_ < 0.0 || static_breakaway_angle_max_deg_ < static_breakaway_angle_min_deg_) {
       throw std::runtime_error("invalid trajectory, wheel-mode, or near-zero-breakaway setting");
     }
+    if (per_module_motion &&
+        (module_state_a_deg_.size() != kModuleNames.size() || module_state_b_deg_.size() != kModuleNames.size())) {
+      throw std::runtime_error("per_module_two_state_cycle requires four module_state_a_deg and module_state_b_deg values in A,B,C,D order");
+    }
     for (const auto &name : active_modules_) {
       if (std::find(kModuleNames.begin(), kModuleNames.end(), name) == kModuleNames.end()) throw std::runtime_error("unknown active module");
     }
     publisher_ = create_publisher<kilin_msgs::msg::MotorCmdStamped>(command_topic_, 10);
     subscriber_ = create_subscription<kilin_msgs::msg::MotorStateStamped>(state_topic_, rclcpp::QoS(20).best_effort(), std::bind(&CampaignRunner::onState, this, std::placeholders::_1));
     timer_ = create_wall_timer(std::chrono::milliseconds(10), std::bind(&CampaignRunner::tick, this));
-    RCLCPP_INFO(get_logger(), "Runner ready: strategy=%s v%s armed=%s command_topic=%s wheel_mode=%s", strategy_name_.c_str(), strategy_version_.c_str(), armed_ ? "true" : "false", command_topic_.c_str(), wheel_mode_.c_str());
+    RCLCPP_INFO(get_logger(), "Runner ready: strategy=%s v%s motion_mode=%s armed=%s command_topic=%s wheel_mode=%s", strategy_name_.c_str(), strategy_version_.c_str(), motion_mode_.c_str(), armed_ ? "true" : "false", command_topic_.c_str(), wheel_mode_.c_str());
   }
 
  private:
@@ -160,8 +169,14 @@ class CampaignRunner final : public rclcpp::Node {
   bool active(size_t i) const { return std::find(active_modules_.begin(), active_modules_.end(), kModuleNames[i]) != active_modules_.end(); }
   double actual(size_t i) const { return hips_[i].motor + hips_[i].diff; }
   double sign(size_t i) const { return i < 2 ? -1.0 : 1.0; }
-  double stateA(size_t i) const { return active(i) ? sign(i) * state_a_deg_ * kDegToRad : 0.0; }
-  double stateB(size_t i) const { return active(i) ? sign(i) * state_b_deg_ * kDegToRad : 0.0; }
+  double stateA(size_t i) const {
+    const double magnitude_deg = motion_mode_ == "per_module_two_state_cycle" ? module_state_a_deg_[i] : state_a_deg_;
+    return active(i) ? sign(i) * magnitude_deg * kDegToRad : 0.0;
+  }
+  double stateB(size_t i) const {
+    const double magnitude_deg = motion_mode_ == "per_module_two_state_cycle" ? module_state_b_deg_[i] : state_b_deg_;
+    return active(i) ? sign(i) * magnitude_deg * kDegToRad : 0.0;
+  }
   double recovery(size_t i) const { return active(i) ? sign(i) * recovery_deg_ * kDegToRad : 0.0; }
   bool freshState() const { return have_state_ && (now() - last_state_).seconds() <= max_state_age_s_; }
   double elapsed() const { return (now() - phase_start_).seconds(); }
@@ -616,11 +631,11 @@ class CampaignRunner final : public rclcpp::Node {
   }
 
   bool armed_{false}, have_state_{false}; int repetitions_{3}, completed_repetitions_{0}; uint32_t sequence_{0};
-  std::string command_topic_, state_topic_, run_dir_, strategy_name_, strategy_version_; std::vector<std::string> active_modules_;
+  std::string command_topic_, state_topic_, run_dir_, strategy_name_, strategy_version_, motion_mode_; std::vector<std::string> active_modules_;
   double state_a_deg_{0}, state_b_deg_{45}, startup_speed_{.1}, recovery_deg_{0}, recovery_speed_{.1}, recovery_rest_s_{1}, hip_speed_{.2}, kp_{360}, ki_{0}, kd_{5}, max_ff_{200}, start_hold_s_{2}, segment_hold_s_{1}, max_state_age_s_{.1}, max_error_rad_{.35}, max_torque_{400}, wheel_torque_outward_{0}, wheel_torque_inward_{0}, max_wheel_torque_{20}, hip_to_wheel_m_{.260}, wheel_radius_m_{.051}, wheel_rate_deadband_rad_s_{.02}, hub_travel_ratio_min_{.75}, hub_travel_ratio_max_{1.25}, hub_travel_min_command_rad_{.25};
   double static_breakaway_step_1_s_{.10}, static_breakaway_step_2_s_{.30}, static_breakaway_exp_start_outward_{0}, static_breakaway_exp_peak_outward_{0}, static_breakaway_exp_start_inward_{0}, static_breakaway_exp_peak_inward_{0}, static_breakaway_exp_tau_s_{.20}, static_breakaway_error_enable_rad_{.02}, static_breakaway_error_full_rad_{.05}, static_breakaway_error_disable_rad_{.01}, static_breakaway_dwell_speed_rad_s_{.03}, static_breakaway_release_speed_rad_s_{.10}, static_breakaway_velocity_filter_alpha_{.20}, static_breakaway_angle_blend_outward_{0}, static_breakaway_angle_blend_inward_{0}, static_breakaway_angle_min_deg_{15}, static_breakaway_angle_max_deg_{90};
   std::string wheel_mode_, static_breakaway_policy_, static_breakaway_angle_mode_, static_breakaway_velocity_source_;
-  std::vector<double> static_breakaway_steps_outward_, static_breakaway_steps_inward_;
+  std::vector<double> module_state_a_deg_, module_state_b_deg_, static_breakaway_steps_outward_, static_breakaway_steps_inward_;
   std::array<HipState, 4> hips_{};
   std::array<HubState, 4> hubs_{};
   std::array<BreakawayState, 4> breakaway_{};
