@@ -38,7 +38,8 @@ It reads `trial_config.yaml` from one trial directory, so the copied terrain,
 FAST-LIO2, hip-PID, mapper, controller, and recording settings stay next to the
 bag. It starts FAST-LIO2 first, then the optional terrain mapper, rosbag, and
 finally the controller. Every child process has a retained console file under
-`console/<UTC timestamp>/`.
+`console/<UTC timestamp>/`; that same stdout/stderr is also shown live in the
+invoking terminal.
 
 Before it starts the mapper, recorder, or controller, the runner requires one
 message on `fastlio.required_odometry_topic` (default:
@@ -112,7 +113,7 @@ controller:
   terrain_profile: terrain_profile.yaml
   hip_pid_profile: hip_pid.yaml
   use_odometry: true
-  odometry_relative_origin: false
+  odometry_relative_origin: true
   use_terrain_window: true
   terrain_window_timeout_s: 1.0
   use_speed_command: false
@@ -424,6 +425,8 @@ arguments.  The generic launch also has the two arguments marked `generic`.
 | `use_terrain_window` | `false` | `true`, `false` | Replaces analytical terrain with latest live window. | **Yes**. |
 | `terrain_window_topic` | `/kilin/terrain/local_window` | ROS topic | `TerrainWindow` input. | No. |
 | `terrain_window_timeout_s` | `1.0` s | positive seconds | Maximum accepted TerrainWindow age before terrain safety hold. | No without safety review. |
+| `angle_diff_compensation.gain` | `0.0` | non-negative scalar | Adds this fraction of each hip's greatest observed outward `position_diff` to outward motor targets. | Set explicitly only for a documented transmission experiment. |
+| `angle_diff_compensation.maximum_abs_rad` | `0.10` rad | positive radians | Hard per-hip bound on the added compensation. | No without safety review. |
 | `live_terrain.initial_flat_support.enabled` | `true` | `true`, `false` | Enables fixed initial support seed only. | No without safety review. |
 | `live_terrain.initial_flat_support.rear_m` | `0.65` m | non-negative m | Rear extent of seeded support envelope. | No. |
 | `live_terrain.initial_flat_support.forward_m` | `0.85` m | non-negative m | Forward extent of seeded support envelope. | No. |
@@ -501,3 +504,17 @@ arguments.  The generic launch also has the two arguments marked `generic`.
 The active PID values are logged when the node starts.  The controller will
 not publish a hip position command until fresh feedback has produced its first
 feedback-derived command; no parameter disables that startup interlock.
+
+### One-sided angle-difference compensation
+
+The motor-state absolute sensor reports `position_diff`; for new recordings,
+`actual_hip_angle = motor_position + position_diff`. With the default
+`angle_diff_compensation.gain: 0.0`, this measurement is recorded but does not
+change a command. With a positive gain, the controller retains each hip's
+greatest observed **outward** difference since node startup (front: most
+negative; rear: most positive) and adds `gain × difference` to an outward
+target only. For example, a front target of -45 degrees with greatest
+`position_diff = -2 degrees` and gain 0.4 becomes -45.8 degrees. Inward
+targets receive no bias, and the addition is bounded by
+`angle_diff_compensation.maximum_abs_rad`. This is an experimental transmission
+compensation, not a force/contact estimate; retain a gain-zero baseline.

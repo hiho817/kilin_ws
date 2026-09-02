@@ -56,6 +56,16 @@ def generate_launch_description():
             DeclareLaunchArgument("vicon_trigger_test_duration_s", default_value="3.0"),
             DeclareLaunchArgument("debug_publish", default_value="false"),
             DeclareLaunchArgument(
+                "angle_diff_compensation_gain",
+                default_value="0.0",
+                description="Experimental outward position_diff compensation gain; zero disables it.",
+            ),
+            DeclareLaunchArgument(
+                "angle_diff_compensation_maximum_abs_rad",
+                default_value="0.10",
+                description="Hard per-hip bound for angle-difference compensation.",
+            ),
+            DeclareLaunchArgument(
                 "use_terrain_window",
                 default_value="false",
                 description=(
@@ -115,6 +125,12 @@ def generate_launch_description():
                             "vicon_trigger_test_duration_s"
                         ),
                         "debug_publish_enabled": LaunchConfiguration("debug_publish"),
+                        "angle_diff_compensation.gain": LaunchConfiguration(
+                            "angle_diff_compensation_gain"
+                        ),
+                        "angle_diff_compensation.maximum_abs_rad": LaunchConfiguration(
+                            "angle_diff_compensation_maximum_abs_rad"
+                        ),
                     },
                 ],
             ),

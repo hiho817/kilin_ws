@@ -99,6 +99,11 @@ class KnownTerrainController(Node):
         self._completed = False
         self._last_joint_state_time = None
         self._measured_hips = None
+        self._measured_position_diff = None
+        # Front hips move outward in the negative direction, rear hips in the
+        # positive direction. This stores the largest observed sensor-side
+        # backlash difference in that outward direction for FL/FR/RL/RR.
+        self._greatest_outward_position_diff = np.zeros(4)
         self._commanded_hips = None
         self._hip_target = None
         self._hip_target_reached_ns = None
@@ -269,6 +274,8 @@ class KnownTerrainController(Node):
             "hip_kp": 350.0,
             "hip_ki": 0.0,
             "hip_kd": 5.0,
+            "angle_diff_compensation.gain": 0.0,
+            "angle_diff_compensation.maximum_abs_rad": 0.10,
             "position_mode": 4,
             "velocity_mode": 5,
             "rest_mode": 0,
@@ -1193,6 +1200,23 @@ class KnownTerrainController(Node):
         self, hip_rad, wheel_rad_s, hubs_at_rest: bool = False
     ) -> MotorCmdStamped:
         hips = validate_four(hip_rad, "hip command")
+        gain = float(self.get_parameter("angle_diff_compensation.gain").value)
+        if gain != 0.0:
+            maximum_abs_rad = float(
+                self.get_parameter("angle_diff_compensation.maximum_abs_rad").value
+            )
+            outward_sign = np.asarray([-1.0, -1.0, 1.0, 1.0])
+            with self._lock:
+                outward_difference = self._greatest_outward_position_diff.copy()
+            # Compensation is deliberately one-sided. Do not add an outward
+            # bias to a target which would move the leg inward.
+            outward_target = outward_sign * hips > 0.0
+            compensation = np.clip(
+                gain * outward_difference,
+                -maximum_abs_rad,
+                maximum_abs_rad,
+            )
+            hips = hips + np.where(outward_target, compensation, 0.0)
         wheels = validate_four(wheel_rad_s, "wheel command")
         message = MotorCmdStamped()
         legs = (message.module_a, message.module_b, message.module_c, message.module_d)
@@ -1327,13 +1351,31 @@ class KnownTerrainController(Node):
             ],
             dtype=float,
         )
-        if not np.all(np.isfinite(hips)):
+        position_diff = np.asarray(
+            [
+                message.module_a.hip.position_diff,
+                message.module_b.hip.position_diff,
+                message.module_c.hip.position_diff,
+                message.module_d.hip.position_diff,
+            ],
+            dtype=float,
+        )
+        if not np.all(np.isfinite(hips)) or not np.all(np.isfinite(position_diff)):
             if not self._warned_waiting_for_feedback:
-                self.get_logger().warning("MotorStateStamped contains non-finite hip positions")
+                self.get_logger().warning(
+                    "MotorStateStamped contains non-finite hip position or position_diff"
+                )
                 self._warned_waiting_for_feedback = True
             return
         with self._lock:
             self._measured_hips = hips
+            self._measured_position_diff = position_diff
+            outward_sign = np.asarray([-1.0, -1.0, 1.0, 1.0])
+            previous_outward = outward_sign * self._greatest_outward_position_diff
+            observed_outward = outward_sign * position_diff
+            self._greatest_outward_position_diff = outward_sign * np.maximum(
+                previous_outward, observed_outward
+            )
             self._last_joint_state_time = self.get_clock().now()
 
     def stop(self) -> None:

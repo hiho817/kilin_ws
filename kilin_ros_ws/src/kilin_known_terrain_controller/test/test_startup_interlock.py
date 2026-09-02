@@ -49,6 +49,8 @@ def _controller_with_fresh_feedback():
         "hip_kp": 350.0,
         "hip_ki": 0.0,
         "hip_kd": 5.0,
+        "angle_diff_compensation.gain": 0.0,
+        "angle_diff_compensation.maximum_abs_rad": 0.10,
         "position_mode": 4,
         "velocity_mode": 5,
         "rest_mode": 0,
@@ -66,6 +68,7 @@ def _controller_with_fresh_feedback():
     controller._lock = Lock()
     controller._publisher = _Publisher()
     controller._measured_hips = np.array([0.10, -0.20, 0.30, -0.40])
+    controller._greatest_outward_position_diff = np.zeros(4)
     controller._commanded_hips = None
     controller._latest_command = MotorCmdStamped()
     return controller
@@ -127,3 +130,31 @@ def test_shutdown_stays_silent_if_no_feedback_derived_command_was_initialized():
     KnownTerrainController.stop(controller)
 
     assert controller._publisher.messages == []
+
+
+def test_outward_angle_diff_compensation_uses_greatest_outward_difference_only():
+    controller = _controller_with_fresh_feedback()
+    parameters = {
+        "angle_diff_compensation.gain": 0.4,
+        "angle_diff_compensation.maximum_abs_rad": np.deg2rad(10.0),
+    }
+    original_get_parameter = controller.get_parameter
+    controller.get_parameter = lambda name: (
+        _parameter(parameters[name]) if name in parameters else original_get_parameter(name)
+    )
+    controller._greatest_outward_position_diff = np.deg2rad([-2.0, -3.0, 4.0, 1.0])
+
+    command = KnownTerrainController._motor_command(
+        controller,
+        np.deg2rad([-45.0, -45.0, 45.0, 45.0]),
+        np.zeros(4),
+        hubs_at_rest=True,
+    )
+
+    hips_deg = np.rad2deg([
+        command.module_a.hip.position,
+        command.module_b.hip.position,
+        command.module_c.hip.position,
+        command.module_d.hip.position,
+    ])
+    np.testing.assert_allclose(hips_deg, [-45.8, -46.2, 46.6, 45.4])

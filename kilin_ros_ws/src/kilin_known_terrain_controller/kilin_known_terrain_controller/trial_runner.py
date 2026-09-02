@@ -9,6 +9,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+from threading import Thread
 import time
 from typing import Any
 
@@ -116,7 +117,7 @@ class TrialRunner:
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             self.log_dir = trial_dir / str(console_logging.get("directory", "console")) / stamp
             self.log_dir.mkdir(parents=True, exist_ok=False)
-        self.processes: list[tuple[str, subprocess.Popen[Any], Any]] = []
+        self.processes: list[tuple[str, subprocess.Popen[Any], Any, Thread | None]] = []
         self._runner_start_monotonic = time.monotonic()
         self.environment = os.environ.copy()
         self.environment["PYTHONNOUSERSITE"] = "1"
@@ -133,18 +134,34 @@ class TrialRunner:
             return "the invoking terminal (console_logging.enabled=false)"
         return str(self.log_dir / f"{name}.log")
 
+    @staticmethod
+    def _tee_output(process: subprocess.Popen[Any], stream: Any) -> None:
+        """Mirror captured child output to both its log file and this terminal."""
+        assert process.stdout is not None
+        for line in process.stdout:
+            stream.write(line)
+            stream.flush()
+            sys.stdout.write(line)
+            sys.stdout.flush()
+
     def _start(self, name: str, command: list[str]) -> None:
         stream = None if self.log_dir is None else (self.log_dir / f"{name}.log").open("w", encoding="utf-8")
         self._runner_log(f"Starting {name}; console log: {self._log_location(name)}")
         self._runner_log("Command: " + " ".join(command))
         process = subprocess.Popen(
             command,
-            stdout=stream,
+            stdout=subprocess.PIPE if stream is not None else None,
             stderr=subprocess.STDOUT if stream is not None else None,
+            text=stream is not None,
+            bufsize=1 if stream is not None else -1,
             env=self.environment,
             start_new_session=True,
         )
-        self.processes.append((name, process, stream))
+        tee_thread = None
+        if stream is not None:
+            tee_thread = Thread(target=self._tee_output, args=(process, stream), daemon=True)
+            tee_thread.start()
+        self.processes.append((name, process, stream, tee_thread))
 
     def _wait_until_start_offset(self, component: str, offset_s: float) -> None:
         """Wait until a component's configured offset from runner invocation."""
@@ -182,16 +199,27 @@ class TrialRunner:
             f"readiness log: {self._log_location(log_name)}"
         )
         try:
-            if log_path is not None:
-                with log_path.open("w", encoding="utf-8") as stream:
-                    result = subprocess.run(
-                        command, stdout=stream, stderr=subprocess.STDOUT,
-                        env=self.environment, timeout=timeout_s, check=False,
-                    )
-            else:
+            if log_path is None:
                 result = subprocess.run(
                     command, env=self.environment, timeout=timeout_s, check=False,
                 )
+            else:
+                with log_path.open("w", encoding="utf-8") as stream:
+                    process = subprocess.Popen(
+                        command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, bufsize=1, env=self.environment,
+                    )
+                    tee_thread = Thread(target=self._tee_output, args=(process, stream), daemon=True)
+                    tee_thread.start()
+                    try:
+                        returncode = process.wait(timeout=timeout_s)
+                    except subprocess.TimeoutExpired:
+                        process.terminate()
+                        process.wait(timeout=2.0)
+                        raise
+                    finally:
+                        tee_thread.join(timeout=2.0)
+                    result = subprocess.CompletedProcess(command, returncode)
         except subprocess.TimeoutExpired as error:
             raise RuntimeError(
                 f"{component} readiness failed: no message arrived on {topic} within "
@@ -264,6 +292,15 @@ class TrialRunner:
         ]
         for key in REQUIRED_CONTROLLER_KEYS:
             command.append(f"{key}:={_ros_value(controller[key])}")
+        for config_key, launch_key in (
+            ("angle_diff_compensation.gain", "angle_diff_compensation_gain"),
+            (
+                "angle_diff_compensation.maximum_abs_rad",
+                "angle_diff_compensation_maximum_abs_rad",
+            ),
+        ):
+            if config_key in controller:
+                command.append(f"{launch_key}:={_ros_value(controller[config_key])}")
         command.extend(
             [
                 f"terrain_profile:={self.trial_dir / controller['terrain_profile']}",
@@ -282,7 +319,7 @@ class TrialRunner:
         self._wait_for_required_odometry()
         self._wait_for_required_terrain()
         self._start("controller", self._controller_command())
-        _, process, _ = self.processes[-1]
+        _, process, _, _ = self.processes[-1]
         returncode = process.wait()
         if returncode != 0:
             raise RuntimeError(
@@ -290,7 +327,7 @@ class TrialRunner:
             )
 
     def stop(self) -> None:
-        for name, process, stream in reversed(self.processes):
+        for name, process, stream, tee_thread in reversed(self.processes):
             if process.poll() is None:
                 self._runner_log(f"Stopping {name}")
                 os.killpg(process.pid, signal.SIGINT)
@@ -300,6 +337,8 @@ class TrialRunner:
                     self._runner_log(f"Force-stopping {name}")
                     os.killpg(process.pid, signal.SIGTERM)
             if stream is not None:
+                if tee_thread is not None:
+                    tee_thread.join(timeout=2.0)
                 stream.close()
 
     def run(self) -> None:

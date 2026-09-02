@@ -91,6 +91,15 @@ def _trial_actions(context):
             "vicon_trigger_test_duration_s": _value(controller.get("vicon_trigger_test_duration_s", 3.0)),
         }
     )
+    for config_key, launch_key in (
+        ("angle_diff_compensation.gain", "angle_diff_compensation_gain"),
+        (
+            "angle_diff_compensation.maximum_abs_rad",
+            "angle_diff_compensation_maximum_abs_rad",
+        ),
+    ):
+        if config_key in controller:
+            launch_arguments[launch_key] = _value(controller[config_key])
     actions.append(
         TimerAction(
             period=float(controller["startup_wait_s"]),
