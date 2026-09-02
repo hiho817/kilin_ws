@@ -2,7 +2,12 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
+from launch.substitutions import (
+    IfElseSubstitution,
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import Node, SetRemap
 from launch_ros.substitutions import FindPackageShare
 
@@ -17,13 +22,22 @@ def generate_launch_description():
     hard_motion_limit_s = LaunchConfiguration("hard_motion_limit_s")
     auto_initialize_stance = LaunchConfiguration("auto_initialize_stance")
     debug_publish = LaunchConfiguration("debug_publish")
-    terrain_profile = LaunchConfiguration("terrain_profile")
+    def profile_path(argument_name):
+        """Resolve a package-relative profile name or an absolute YAML path."""
+        profile = LaunchConfiguration(argument_name)
+        return IfElseSubstitution(
+            PythonExpression(["'", profile, "'.startswith('/')"]),
+            profile,
+            PathJoinSubstitution(
+                [FindPackageShare("kilin_known_terrain_controller"), "config", profile]
+            ),
+        )
+
     config = PathJoinSubstitution(
         [FindPackageShare("kilin_known_terrain_controller"), "config", "one_sided_ramp.yaml"]
     )
-    terrain_config = PathJoinSubstitution(
-        [FindPackageShare("kilin_known_terrain_controller"), "config", terrain_profile]
-    )
+    terrain_config = profile_path("terrain_profile")
+    hip_pid_config = profile_path("hip_pid_profile")
     bridge = GroupAction(
         scoped=True,
         condition=IfCondition(PythonExpression(["'", target, "' == 'isaac'"])),
@@ -50,6 +64,7 @@ def generate_launch_description():
         parameters=[
             config,
             terrain_config,
+            hip_pid_config,
             {
                 "armed": armed,
                 "mode": mode,
@@ -72,6 +87,7 @@ def generate_launch_description():
         parameters=[
             config,
             terrain_config,
+            hip_pid_config,
             {
                 "use_sim_time": False,
                 "armed": armed,
@@ -147,6 +163,14 @@ def generate_launch_description():
                 "terrain_profile",
                 default_value="terrain_80mm_two_ramps.yaml",
                 description="Terrain profile YAML from this package's config directory",
+            ),
+            DeclareLaunchArgument(
+                "hip_pid_profile",
+                default_value="one_sided_ramp.yaml",
+                description=(
+                    "Package profile name by default, or an absolute PID-only YAML path "
+                    "containing hip_kp, hip_ki, and hip_kd."
+                ),
             ),
             bridge,
             isaac_controller,

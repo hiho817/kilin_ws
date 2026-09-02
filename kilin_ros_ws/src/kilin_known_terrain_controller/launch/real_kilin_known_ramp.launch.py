@@ -2,7 +2,12 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    IfElseSubstitution,
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -10,12 +15,38 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     config_dir = [FindPackageShare("kilin_known_terrain_controller"), "config"]
     base_config = PathJoinSubstitution([*config_dir, "one_sided_ramp.yaml"])
-    terrain_config = PathJoinSubstitution([*config_dir, LaunchConfiguration("terrain_profile")])
+    def profile_path(argument_name):
+        """Resolve a package-relative profile name or an absolute YAML path."""
+        profile = LaunchConfiguration(argument_name)
+        return IfElseSubstitution(
+            PythonExpression(["'", profile, "'.startswith('/')"]),
+            profile,
+            PathJoinSubstitution([*config_dir, profile]),
+        )
+
+    terrain_config = profile_path("terrain_profile")
+    hip_pid_config = profile_path("hip_pid_profile")
     return LaunchDescription(
         [
             DeclareLaunchArgument("armed", default_value="false"),
             DeclareLaunchArgument("mode", default_value="known_ramp"),
-            DeclareLaunchArgument("terrain_profile", default_value="terrain_150mm_20deg_single.yaml"),
+            DeclareLaunchArgument(
+                "terrain_profile",
+                default_value=PathJoinSubstitution(
+                    [*config_dir, "terrain_150mm_20deg_single.yaml"]
+                ),
+                description="Package profile name by default, or an absolute analytical terrain YAML path.",
+            ),
+            DeclareLaunchArgument(
+                "hip_pid_profile",
+                # The base profile already carries the historical default
+                # hip gains.  Per-trial PID overlays are supplied explicitly.
+                default_value=PathJoinSubstitution([*config_dir, "one_sided_ramp.yaml"]),
+                description=(
+                    "Package profile name by default, or an absolute per-trial PID YAML path. "
+                    "This overlay contains hip_kp, hip_ki, and hip_kd only."
+                ),
+            ),
             DeclareLaunchArgument("use_speed_command", default_value="false"),
             DeclareLaunchArgument("speed_m_s", default_value="0.05"),
             DeclareLaunchArgument("run_duration_s", default_value="30.0"),
@@ -53,6 +84,7 @@ def generate_launch_description():
                 parameters=[
                     base_config,
                     terrain_config,
+                    hip_pid_config,
                     {
                         "use_sim_time": False,
                         "armed": LaunchConfiguration("armed"),

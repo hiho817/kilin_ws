@@ -165,6 +165,12 @@ class KnownTerrainController(Node):
             "Motion modes remain silent until fresh hip feedback has been captured "
             "by a control cycle."
         )
+        self.get_logger().info(
+            "Active hip PID: "
+            f"kp={self.get_parameter('hip_kp').value}, "
+            f"ki={self.get_parameter('hip_ki').value}, "
+            f"kd={self.get_parameter('hip_kd').value}"
+        )
         if self._mode in ("planner_posture_test", "known_ramp"):
             hard_limit = float(self.get_parameter("hard_motion_limit_s").value)
             speed_topic_mode = (

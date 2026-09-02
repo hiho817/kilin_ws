@@ -1,9 +1,9 @@
 # Kilin known-terrain controller
 
 This ROS 2 node runs the migrated Version 2 receding-horizon planner online
-against two parameterized, already-known one-sided ramps on opposite wheel
-tracks. It does not replay CSV
-commands and does not use live terrain-map feedback.
+against parameterized analytical ramps or, when `use_terrain_window:=true`, a
+live local elevation window. It does not replay CSV commands. Unknown live
+terrain remains a safety stop rather than an analytical-map fallback.
 
 `kilin_motion_planner` is an explicit ROS workspace dependency. After pulling
 changes, build both packages before launching; no planner checkout under a
@@ -252,3 +252,150 @@ subscriptions to:
 - `/kilin/isaac/imu`
 - `/kilin/isaac/joint_states` (bridge input)
 - `/motor/state` (published by `isaac_bridge` from Isaac JointState)
+
+## Complete parameter reference
+
+This section is the authoritative parameter contract for this package.  The
+**Default** column is the node's declared default unless an entry says
+otherwise. `one_sided_ramp.yaml` and a launch argument can override it.  The
+real-robot launch overlays its own defaults where noted below.  **Set for an
+experiment?** means whether an operator normally needs to state a non-default
+value in the command or per-trial YAML; it is not permission to bypass a safety
+check.
+
+For reproducible real trials, pass absolute per-trial paths for
+`terrain_profile` and `hip_pid_profile`.  The latter is deliberately PID-only:
+it may contain `hip_kp`, `hip_ki`, and `hip_kd`, but not characterization
+strategy, torque feed-forward, or angle-difference compensation.
+
+### Launch arguments
+
+Both `real_kilin_known_ramp.launch.py` and `one_sided_ramp_control.launch.py`
+accept package-relative YAML names or absolute YAML paths for the two profile
+arguments.  The generic launch also has the two arguments marked `generic`.
+
+| Argument | Default (real / generic) | Possible values | Description | Set for an experiment? |
+| --- | --- | --- | --- | --- |
+| `armed` | `false` / `false` | `true`, `false` | Enables motor command publication. | **Yes**: keep `false` for preflight, explicitly use `true` only when ready. |
+| `mode` | `known_ramp` / `hip_test` | `disabled`, `hip_test`, `hip_calibration`, `wheel_calibration`, `stance_initialization`, `planner_posture_test`, `known_ramp` | Selects controller behaviour. | **Yes**. |
+| `terrain_profile` | package `terrain_150mm_20deg_single.yaml` / `terrain_80mm_two_ramps.yaml` | package YAML name or absolute YAML path | Analytical ramp geometry overlay. In live mode it is retained for trial provenance but is not the terrain source. | **Yes**: absolute per-trial path for a recorded trial. |
+| `hip_pid_profile` | package `one_sided_ramp.yaml` / `one_sided_ramp.yaml` | package YAML name or absolute PID-only YAML path | PID overlay loaded after base and terrain profiles. | **Yes**: absolute per-trial `hip_pid.yaml`. |
+| `target` (generic) | — / `real` | `real`, `isaac` | Chooses real motor contract or Isaac bridge/time. | **Yes** for generic launch; use the real-specific launch on hardware. |
+| `use_speed_command` | `false` / `true` | `true`, `false` | Uses the live `Float32` speed topic instead of fixed `speed_m_s`. | **Yes**. |
+| `speed_m_s` | `0.05` / `0.18` | non-negative m/s, capped by `speed_command_max_m_s` only in topic mode | Fixed forward speed. | **Yes** for fixed-speed trials. |
+| `run_duration_s` | `30.0` / `22.0` | positive seconds | Fixed-speed requested duration; ignored in live-speed mode. | **Yes** for fixed-speed trials. |
+| `hard_motion_limit_s` | `35.0` / `22.0` | positive seconds | Upper timeout; effective fixed-speed duration is the lower of this and `run_duration_s`. | **Yes**. |
+| `vicon_trigger` | `false` | `true`, `false` | Enables the physical active-low Vicon GPIO trigger during timed ramp motion. | Only with Vicon. |
+| `vicon_trigger_test` | `false` | `true`, `false` | GPIO-only LED self-test; requires `armed:=false`. | Only for trigger preflight. |
+| `vicon_trigger_test_duration_s` | `3.0` | positive seconds | Trigger self-test pulse duration. | No. |
+| `debug_publish` | `false` | `true`, `false` | Publishes planner horizon and footprints. | Recommended for recorded trials. |
+| `use_terrain_window` | `false` | `true`, `false` | Uses live `TerrainWindow`; unknown terrain is a stop, not analytical fallback. | **Yes**: `false` analytical, `true` live. |
+| `use_odometry` | `false` | `true`, `false` | Uses corrected odometry for progress; stale odometry stops motion. | **Yes** on real terrain runs. |
+| `odometry_relative_origin` | `true` | `true`, `false` | Rebase corrected odometry at planner start for an analytical map. | **Yes**: current live trials use `false`; choose deliberately. |
+| `auto_initialize_stance` (generic) | — / `true` | `true`, `false` | Automatically move to nominal 45-degree stance before `known_ramp`. | No unless already verified at nominal stance. |
+
+### ROS node: transport, feedback, and safety
+
+| Parameter | Default | Possible values | Description | Set for an experiment? |
+| --- | --- | --- | --- | --- |
+| `use_sim_time` | ROS standard `false`; base YAML `true`; real launch forces `false` | `true`, `false` | ROS clock source. | No; real must remain `false`. |
+| `mode` | `disabled` | launch-mode list above | Node mode if no launch overlay is used. | Use launch argument. |
+| `armed` | `false` | `true`, `false` | Motor publication interlock. | Use launch argument. |
+| `command_topic` | `/kilin/motor_cmd_raw` | ROS topic | `MotorCmdStamped` output. Real launch forces `/motor/command`. | No. |
+| `feedback_source` | `motor_state` | `motor_state`, `joint_state` | Selects canonical real feedback or legacy joint state. | No for real Kilin. |
+| `motor_state_topic` | `/motor/state` | ROS topic | `MotorStateStamped` feedback. | No for real Kilin. |
+| `joint_state_topic` | `/kilin_joint_states` | ROS topic | Legacy `JointState` feedback if selected. | Isaac/legacy only. |
+| `feedback_timeout_s` | `0.5` s | positive seconds | Fresh-feedback interlock timeout. | No without safety review. |
+| `position_mode` | `4` | motor-driver position-mode integer | Hip and steering motor mode. | No. |
+| `velocity_mode` | `5` | motor-driver velocity-mode integer | Active hub motor mode. | No. |
+| `rest_mode` | `0` | motor-driver rest-mode integer | Stopped hub motor mode. | No. |
+| `debug_publish_enabled` | `false` | `true`, `false` | Enables horizon/footprint debug topics only. | Recommended for bags. |
+
+### ROS node: odometry, live terrain, and speed input
+
+| Parameter | Default | Possible values | Description | Set for an experiment? |
+| --- | --- | --- | --- | --- |
+| `use_odometry` | `false` | `true`, `false` | Planner position comes from odometry rather than integrated applied speed. | **Yes** on real runs. |
+| `odometry_topic` | `/Odometry` | ROS topic | Real launch forces `/kilin/fastlio/odometry`. | No with real launch. |
+| `odometry_timeout_s` | `0.5` s | positive seconds | Maximum odometry age before safe hold/REST. | No without safety review. |
+| `odometry_required_frame` | empty | frame ID or empty | Rejects odometry from another parent frame. Real launch forces `map`. | No with real launch. |
+| `odometry_relative_origin` | `false` | `true`, `false` | Captures an origin at planner start when enabled. | See launch table. |
+| `use_terrain_window` | `false` | `true`, `false` | Replaces analytical terrain with latest live window. | **Yes**. |
+| `terrain_window_topic` | `/kilin/terrain/local_window` | ROS topic | `TerrainWindow` input. | No. |
+| `live_terrain.initial_flat_support.enabled` | `true` | `true`, `false` | Enables fixed initial support seed only. | No without safety review. |
+| `live_terrain.initial_flat_support.rear_m` | `0.65` m | non-negative m | Rear extent of seeded support envelope. | No. |
+| `live_terrain.initial_flat_support.forward_m` | `0.85` m | non-negative m | Forward extent of seeded support envelope. | No. |
+| `live_terrain.initial_flat_support.half_width_m` | `0.50` m | positive m | Lateral half width of support envelope. | No. |
+| `live_terrain.initial_flat_support.measurement_min_forward_m` | `0.20` m | non-negative m | Near edge of observed flat-strip test. | No. |
+| `live_terrain.initial_flat_support.measurement_max_forward_m` | `0.80` m | greater than minimum | Far edge of observed flat-strip test. | No. |
+| `live_terrain.initial_flat_support.maximum_height_span_m` | `0.05` m | positive m | Flat-cluster height tolerance. | No. |
+| `live_terrain.initial_flat_support.minimum_inlier_fraction` | `0.80` | `(0, 1]` | Required dominant-flat fraction. | No. |
+| `live_terrain.isolated_hole_fill.enabled` | `true` | `true`, `false` | Allows only one isolated, neighbour-consistent unknown node. | No. |
+| `live_terrain.isolated_hole_fill.maximum_height_span_m` | `0.08` m | positive m | Cardinal-neighbour agreement tolerance. | No. |
+| `use_speed_command` | `false` | `true`, `false` | Enables speed-topic mode. | **Yes**. |
+| `speed_command_topic` | `/kilin/control/target_speed_m_s` | ROS topic | `Float32` speed request input. | Only topic mode. |
+| `speed_command_max_m_s` | `0.30` m/s | non-negative m/s | Clamps live speed request. | No without review. |
+| `speed_command_accel_limit_m_s2` | `0.15` m/s²; base YAML `0.0` | non-negative; `0` is direct steps | Rate limit for live speed request. | Only topic mode. |
+| `speed_command_timeout_s` | `0.5` s | positive seconds | Missing speed topic decelerates/stops wheels. | Only topic mode. |
+
+### ROS node: planner, analytical terrain, and motion limits
+
+| Parameter | Default | Possible values | Description | Set for an experiment? |
+| --- | --- | --- | --- | --- |
+| `initial_x_m`, `initial_y_m`, `initial_yaw_rad` | `0`, `0`, `0` | finite m, m, rad | Integrated-position start when odometry is disabled. | Only open-loop/Isaac. |
+| `speed_m_s` | `0.18` m/s | non-negative m/s | Fixed-speed planner input. | Use launch argument. |
+| `startup_delay_s` | `1.0` s | non-negative seconds | Wait after planner readiness before timed motion. | No. |
+| `run_duration_s`, `hard_motion_limit_s` | `22`, `22` s | positive seconds | Fixed-speed requested duration and hard timeout. | Use launch arguments. |
+| `planning_rate_hz`, `publish_rate_hz` | `10`, `50` Hz | positive Hz | Planning timer and motor publication timer. | No without profiling. |
+| `planner_dt_s` | `0.1` s | positive seconds | Optimizer knot time step. | No without planner validation. |
+| `horizon_steps` | `5` | integer ≥ 2 | Number of horizon knots. | No without planner validation. |
+| `horizon_knot_spacing_m` | `0.05` m | positive m | Distance between knots; independent of speed. | No without planner validation. |
+| `planner_deadline_s` | `0.6` s | positive seconds | Rejects late solve and holds safely. | No without timing evidence. |
+| `solver_max_iterations` | `400` | positive integer | SLSQP iteration cap. | No without timing evidence. |
+| `map_resolution_m` | `0.025` m | positive m | Analytical grid resolution around horizon. | Analytical only. |
+| `map_margin_x_m`, `map_half_width_m` | `0.8`, `0.7` m | positive m | Analytical terrain sampling bounds. | Analytical only. |
+| `ramp.height_m` | `0.08` m | non-negative m | First ramp height. | **Yes** in terrain YAML. |
+| `ramp.start_x_m` | `0.75` m | finite m | First up-ramp start in analytical map. | **Yes** in terrain YAML. |
+| `ramp.up_ramp_length_m`, `ramp.deck_length_m`, `ramp.down_ramp_length_m` | `0.30`, `0.35`, `0.30` m | positive m | First ramp segment lengths. | **Yes** in terrain YAML. |
+| `ramp.track_center_y_m`, `ramp.track_width_m` | `0.25`, `0.34` m | finite m, positive m | First ramp lateral centre and width. | **Yes** in terrain YAML. |
+| `ramp.second.enabled` | `true` | `true`, `false` | Enables second analytical ramp. | **Yes** in terrain YAML. |
+| `ramp.second.height_m`, `ramp.second.start_x_m` | `0.08`, `2.70` m | non-negative/finite m | Second-ramp height and start. | If enabled. |
+| `ramp.second.up_ramp_length_m`, `ramp.second.deck_length_m`, `ramp.second.down_ramp_length_m` | `0.30`, `0.35`, `0.30` m | positive m | Second-ramp segment lengths. | If enabled. |
+| `ramp.second.track_center_y_m` | `-0.25` m | finite m | Second-ramp lateral centre; width is shared from `ramp.track_width_m`. | If enabled. |
+| `known_ramp.max_initial_hip_error_deg` | `5.0` deg | non-negative deg | Refuses planner mode if feedback differs too far from nominal stance. | No without safety review. |
+| `known_ramp.auto_initialize_stance` | `true` | `true`, `false` | Initializes nominal stance before known-ramp planning. | Set `false` only after verified nominal stance. |
+| `known_ramp.hip_rate_limit_deg_s` | `144` deg/s | positive deg/s | Applied hip interpolation rate limit. | No without actuator evidence. |
+| `known_ramp.command_smoothing_s` | `0.20` s | non-negative seconds | Smooth transition to each new planner target. | No without tracking evidence. |
+| `planner_posture_test.duration_s` | `4.0` s | positive seconds | Stationary planner-posture test duration. | Only that mode. |
+
+### ROS node: hip PID and diagnostic motion modes
+
+| Parameter | Default | Possible values | Description | Set for an experiment? |
+| --- | --- | --- | --- | --- |
+| `hip_kp`, `hip_ki`, `hip_kd` | `350`, `0`, `5` | finite motor-controller gains | Gains included in every hip position command. | **Yes**: record in per-trial PID YAML. |
+| `hip_test.delta_deg` | `[5, 5, -5, -5]` | four finite degrees (A/B/C/D) | Bounded hip-test displacement. | Only hip test. |
+| `hip_test.rate_deg_s` | `8` deg/s | positive deg/s | Hip-test command rate. | Only hip test. |
+| `hip_test.tolerance_deg` | `0.5` deg | non-negative deg | Hip-test completion tolerance. | Only hip test. |
+| `hip_test.hold_s` | `2.0` s | non-negative seconds | Hip-test final hold. | Only hip test. |
+| `hip_calibration.delta_deg` | `[-3, -3, 3, 3]` | four finite degrees | Sequential outward-calibration displacement. | Only calibration. |
+| `hip_calibration.rate_deg_s`, `hip_calibration.hold_s` | `6`, `1` | positive deg/s, non-negative s | Calibration rate and hold. | Only calibration. |
+| `wheel_calibration.speed_rad_s` | `0.5` rad/s | finite rad/s | Four-wheel sign-check speed. | Only wheel calibration. |
+| `wheel_calibration.pre_drive_hold_s`, `wheel_calibration.drive_s` | `1`, `1` s | non-negative seconds | REST hold then drive duration. | Only wheel calibration. |
+| `stance.target_deg` | `[-45, -45, 45, 45]` | four finite degrees | Standalone or automatic nominal stance. | No unless geometry changes. |
+| `stance.hip_rate_deg_s` | `15` deg/s | positive deg/s | Standalone stance rate. | No without safety review. |
+| `stance.hip_to_wheel_m`, `stance.wheel_radius_m` | `0.260`, `0.0585` m | positive m | Stance wheel-coordination geometry. | No without measurement update. |
+| `stance.tolerance_deg`, `stance.hold_s` | `0.5` deg, `1` s | non-negative deg, seconds | Stance completion tolerance and hold. | No without safety review. |
+
+### ROS node: Vicon trigger
+
+| Parameter | Default | Possible values | Description | Set for an experiment? |
+| --- | --- | --- | --- | --- |
+| `vicon_trigger.enabled` | `false` | `true`, `false` | Owns physical GPIO trigger while timed known-ramp motion is active. | Only with Vicon. |
+| `vicon_trigger.chip`, `vicon_trigger.line` | `/dev/gpiochip0`, `112` | existing chip path, non-negative line | Hardware GPIO identity. | No without hardware change. |
+| `vicon_trigger.gpiod_site_packages` | `/home/biorola/.local/lib/python3.10/site-packages` | valid Python package path | Local gpiod v2 binding location. | No without environment change. |
+| `vicon_trigger.test_mode` | `false` | `true`, `false` | Enables GPIO-only test, which must remain unarmed. | Only trigger preflight. |
+| `vicon_trigger.test_duration_s` | `3.0` s | positive seconds | GPIO self-test duration. | No. |
+
+The active PID values are logged when the node starts.  The controller will
+not publish a hip position command until fresh feedback has produced its first
+feedback-derived command; no parameter disables that startup interlock.
