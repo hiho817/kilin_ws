@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from threading import Lock, Thread
+from threading import RLock, Thread
 
 import numpy as np
 import rclpy
@@ -89,7 +89,12 @@ class KnownTerrainController(Node):
             MarkerArray, "/kilin/planner/debug/footprints", 1
         )
         self._debug_footprint_marker_count = 0
-        self._lock = Lock()
+        # Command construction can read the backlash state while a control
+        # cycle already owns this lock.  This must be re-entrant: with a
+        # non-zero angle-difference compensation gain, _motor_command()
+        # otherwise attempts to acquire the same Lock again and deadlocks the
+        # 10 Hz control cycle before it can publish a command.
+        self._lock = RLock()
         # Do not cache a nominal pose here.  The publish timer runs faster than
         # the control timer, so a cached 45-degree stance could otherwise be
         # sent for one or more cycles immediately after the first feedback.

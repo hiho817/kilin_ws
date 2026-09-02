@@ -335,12 +335,36 @@ class TrialRunner:
         for name, process, stream, tee_thread in reversed(self.processes):
             if process.poll() is None:
                 self._runner_log(f"Stopping {name}")
-                os.killpg(process.pid, signal.SIGINT)
+                try:
+                    # For ``ros2 launch``, signal the launch manager only.
+                    # It owns the ordered ROS shutdown of its child nodes.
+                    # Broadcasting SIGINT to the whole process group races
+                    # that manager and has made the Livox driver terminate
+                    # uncleanly in real trials.
+                    process.send_signal(signal.SIGINT)
+                except ProcessLookupError:
+                    # The launch process already exited.
+                    pass
                 try:
                     process.wait(timeout=8.0)
                 except subprocess.TimeoutExpired:
-                    self._runner_log(f"Force-stopping {name}")
-                    os.killpg(process.pid, signal.SIGTERM)
+                    self._runner_log(f"Escalating {name} to SIGTERM after 8.0 s")
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        process.wait(timeout=3.0)
+                    except subprocess.TimeoutExpired:
+                        self._runner_log(f"Escalating {name} to SIGKILL after 3.0 s")
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        process.wait(timeout=3.0)
+            returncode = process.poll()
+            if returncode is not None:
+                self._runner_log(f"{name} stopped with exit status {returncode}")
             if stream is not None:
                 if tee_thread is not None:
                     tee_thread.join(timeout=2.0)
