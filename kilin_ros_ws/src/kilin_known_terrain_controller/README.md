@@ -30,6 +30,99 @@ the safe real target (no Isaac process is started):
 ros2 launch kilin_known_terrain_controller one_sided_ramp_control.launch.py
 ```
 
+## Reproducible real-robot trial runner
+
+For a real-Kilin experiment, prefer `run_real_terrain_trial` over starting
+FAST-LIO2, recording, the mapper, and the controller in separate terminals.
+It reads `trial_config.yaml` from one trial directory, so the copied terrain,
+FAST-LIO2, hip-PID, mapper, controller, and recording settings stay next to the
+bag. It starts FAST-LIO2 first, then the optional terrain mapper, rosbag, and
+finally the controller. Every child process has a retained console file under
+`console/<UTC timestamp>/`.
+
+Before it starts the mapper, recorder, or controller, the runner requires one
+message on `fastlio.required_odometry_topic` (default:
+`/kilin/fastlio/odometry`). If that does not arrive within the configured
+`fastlio.required_odometry_wait_s`, it exits without arming and points to both
+`fastlio.log` and `fastlio_readiness.log` in the trial directory.
+
+When `controller.use_terrain_window: true`, the runner also requires one
+message on `terrain_mapper.required_terrain_topic` (default:
+`/kilin/terrain/local_window`) before it starts recording or the controller.
+This applies whether the runner starts the mapper itself or the mapper is an
+already-running external process. A missing required topic is therefore a
+startup refusal, not a condition that can reach a moving controller.
+
+`real_kilin_trial_stack.launch.py` reads the same manifest and provides an
+interactive selectable stack: FAST-LIO2 → optional mapper → optional rosbag →
+controller. Every component's `startup_wait_s` is its absolute offset from the
+main command, not a delay relative to the preceding component. The supplied
+template schedules FAST-LIO2 at 0 s, mapper at 4 s, recorder at 6 s, and
+controller at 8 s. Use the runner for an armed traversal: it additionally
+waits for actual required-topic messages before starting the controller.
+
+```bash
+PYTHONNOUSERSITE=1 ros2 run kilin_known_terrain_controller run_real_terrain_trial \
+  --trial-dir /home/biorola/kilin_ws/logs/2026-09-02/analytical_map_test05 \
+  --allow-armed
+```
+
+The runner refuses to arm unless both `controller.armed: true` in the local
+YAML and `--allow-armed` are present. It also refuses to overwrite an existing
+bag directory. Set `recording.mode: all` for complete ROS graph capture, or
+set `recording.mode: selected` and list only absolute ROS topics under
+`recording.topics`. The 2026-09-02 campaign README contains the copyable YAML
+template and exact operating instructions.
+
+### Trial manifest example
+
+This abbreviated `trial_config.yaml` shows the stack and logging controls. The
+full copyable example, including the selected-topic list, is in the campaign
+template.
+
+```yaml
+console_logging:
+  enabled: true
+  directory: console          # creates console/<UTC timestamp>/ in this trial
+
+fastlio:
+  enabled: true
+  config: fastlio_config.yaml
+  startup_wait_s: 0.0
+  required_odometry_topic: /kilin/fastlio/odometry
+  required_odometry_wait_s: 8.0
+
+terrain_mapper:
+  enabled: true
+  profile: terrain_mapper_profile.yaml
+  startup_wait_s: 4.0
+  required_terrain_topic: /kilin/terrain/local_window
+  required_terrain_wait_s: 5.0
+
+recording:
+  enabled: true
+  mode: all                   # or selected with an explicit topics list
+  output_directory: bag
+  startup_wait_s: 6.0
+
+controller:
+  startup_wait_s: 8.0
+  armed: true
+  mode: known_ramp
+  terrain_profile: terrain_profile.yaml
+  hip_pid_profile: hip_pid.yaml
+  use_odometry: true
+  odometry_relative_origin: false
+  use_terrain_window: true
+  terrain_window_timeout_s: 1.0
+  use_speed_command: false
+  speed_m_s: 0.10
+  run_duration_s: 30.0
+  hard_motion_limit_s: 35.0
+  vicon_trigger: true
+  debug_publish: true
+```
+
 For Isaac simulation, select its target explicitly:
 
 ```bash
@@ -198,6 +291,14 @@ If corrected odometry is absent, is in the wrong frame, or becomes older than
 `odometry_timeout_s`, the controller holds the current hips and commands all
 wheel hubs to REST. It does not fall back to time-integrated position.
 
+For every planner mode, the controller has a second independent input gate:
+when `use_odometry: true`, it publishes no startup/stance motion until fresh
+accepted odometry exists; when `use_terrain_window: true`, it likewise waits
+for a fresh TerrainWindow. Loss of either stream after motion has begun causes
+an `ODOMETRY SAFETY HOLD` or `TERRAIN SAFETY HOLD`, holding hips and setting
+wheel hubs to REST. The default terrain timeout is 1.0 s, intentionally larger
+than the normal 5 Hz terrain-window interval.
+
 ## Live terrain-window startup policy
 
 For a live FAST-LIO terrain window, start Kilin on a verified flat approach
@@ -322,6 +423,7 @@ arguments.  The generic launch also has the two arguments marked `generic`.
 | `odometry_relative_origin` | `false` | `true`, `false` | Captures an origin at planner start when enabled. | See launch table. |
 | `use_terrain_window` | `false` | `true`, `false` | Replaces analytical terrain with latest live window. | **Yes**. |
 | `terrain_window_topic` | `/kilin/terrain/local_window` | ROS topic | `TerrainWindow` input. | No. |
+| `terrain_window_timeout_s` | `1.0` s | positive seconds | Maximum accepted TerrainWindow age before terrain safety hold. | No without safety review. |
 | `live_terrain.initial_flat_support.enabled` | `true` | `true`, `false` | Enables fixed initial support seed only. | No without safety review. |
 | `live_terrain.initial_flat_support.rear_m` | `0.65` m | non-negative m | Rear extent of seeded support envelope. | No. |
 | `live_terrain.initial_flat_support.forward_m` | `0.85` m | non-negative m | Forward extent of seeded support envelope. | No. |

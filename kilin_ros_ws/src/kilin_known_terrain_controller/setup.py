@@ -26,6 +26,8 @@ setup(
         "console_scripts": [
             "known_terrain_controller = "
             "kilin_known_terrain_controller.controller_node:main",
+            "run_real_terrain_trial = "
+            "kilin_known_terrain_controller.trial_runner:main",
         ],
     },
 )

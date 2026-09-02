@@ -67,6 +67,27 @@ def test_required_odometry_never_falls_back_to_time_integration():
     controller._start_plan_cycle()
 
     assert calls == [
-        ("trigger", False, "corrected odometry stale"),
         ("stop",),
+        ("trigger", False, "required planner input unavailable"),
     ]
+
+
+def test_required_planner_inputs_block_start_until_odometry_and_terrain_are_fresh():
+    controller = KnownTerrainController.__new__(KnownTerrainController)
+    values = {"use_odometry": True, "use_terrain_window": True}
+    controller.get_parameter = lambda name: parameter(values[name])
+    calls = []
+    controller._odometry_is_fresh = lambda: False
+    controller._terrain_is_fresh = lambda: True
+    controller._stop_for_unavailable_odometry = lambda: calls.append("odometry")
+    controller._stop_for_unavailable_terrain = lambda: calls.append("terrain")
+
+    assert not controller._required_planner_inputs_are_fresh()
+    assert calls == ["odometry"]
+
+    controller._odometry_is_fresh = lambda: True
+    controller._terrain_is_fresh = lambda: False
+    controller._warned_odometry_unavailable = True
+
+    assert not controller._required_planner_inputs_are_fresh()
+    assert calls == ["odometry", "terrain"]

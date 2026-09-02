@@ -135,9 +135,11 @@ class KnownTerrainController(Node):
         self._open_loop_yaw_rad = None
         self._last_open_loop_update_ns = None
         self._last_odom_time = None
+        self._last_terrain_time = None
         self._odometry_origin_xy_yaw = None
         self._warned_odometry_unavailable = False
         self._warned_odometry_frame = False
+        self._warned_terrain_unavailable = False
         self._trigger_chip = None
         self._trigger_request = None
         self._trigger_gpiod = None
@@ -214,6 +216,7 @@ class KnownTerrainController(Node):
             "odometry_relative_origin": False,
             "use_terrain_window": False,
             "terrain_window_topic": "/kilin/terrain/local_window",
+            "terrain_window_timeout_s": 1.0,
             "live_terrain.initial_flat_support.enabled": True,
             "live_terrain.initial_flat_support.rear_m": 0.65,
             # Covers the initial five-knot preview plus the approximately
@@ -381,6 +384,10 @@ class KnownTerrainController(Node):
         if self._mode == "known_ramp" and not self._feedback_is_fresh():
             self._set_vicon_trigger(False, "motor feedback stale")
             return
+        if self._mode in ("known_ramp", "planner_posture_test"):
+            if not self._required_planner_inputs_are_fresh():
+                self._set_vicon_trigger(False, "required planner input unavailable")
+                return
         if self._mode == "known_ramp" and not self._known_ramp_stance_ready:
             self._stance_initialization_cycle(continue_to_planner=True)
         elif self._mode in ("planner_posture_test", "known_ramp"):
@@ -560,13 +567,35 @@ class KnownTerrainController(Node):
         age_s = (self.get_clock().now() - self._last_odom_time).nanoseconds * 1.0e-9
         return 0.0 <= age_s <= float(self.get_parameter("odometry_timeout_s").value)
 
+    def _terrain_is_fresh(self) -> bool:
+        if self._last_terrain_time is None or self._latest_terrain is None:
+            return False
+        age_s = (self.get_clock().now() - self._last_terrain_time).nanoseconds * 1.0e-9
+        return 0.0 <= age_s <= float(self.get_parameter("terrain_window_timeout_s").value)
+
+    def _required_planner_inputs_are_fresh(self) -> bool:
+        """Block planner motion until every enabled external input is fresh."""
+        if bool(self.get_parameter("use_odometry").value) and not self._odometry_is_fresh():
+            self._stop_for_unavailable_odometry()
+            return False
+        self._warned_odometry_unavailable = False
+        if bool(self.get_parameter("use_terrain_window").value) and not self._terrain_is_fresh():
+            self._stop_for_unavailable_terrain()
+            return False
+        self._warned_terrain_unavailable = False
+        return True
+
     def _odometry_callback(self, message: Odometry) -> None:
         required_frame = str(self.get_parameter("odometry_required_frame").value)
         if required_frame and message.header.frame_id != required_frame:
             if not self._warned_odometry_frame:
                 self.get_logger().error(
-                    "Ignoring odometry in frame "
-                    f"'{message.header.frame_id}'; required frame is '{required_frame}'"
+                    "ODOMETRY REJECTED: topic="
+                    f"{self.get_parameter('odometry_topic').value}, received parent "
+                    f"frame='{message.header.frame_id or '<empty>'}', expected "
+                    f"frame='{required_frame}'. The controller will hold the hips and "
+                    "keep hubs in REST until corrected odometry is published in the "
+                    "required frame. Check the FAST-LIO hip-center adapter."
                 )
                 self._warned_odometry_frame = True
             return
@@ -630,14 +659,64 @@ class KnownTerrainController(Node):
                     self._commanded_hips, np.zeros(4), hubs_at_rest=True
                 )
         if not self._warned_odometry_unavailable:
+            topic = str(self.get_parameter("odometry_topic").value)
+            timeout_s = float(self.get_parameter("odometry_timeout_s").value)
+            with self._lock:
+                last_odom_time = self._last_odom_time
+            if last_odom_time is None:
+                diagnostic = (
+                    f"no accepted message has arrived on {topic}. Start FAST-LIO and its "
+                    "hip-center odometry adapter, then verify the topic with "
+                    f"'ros2 topic echo {topic} --once'."
+                )
+            else:
+                age_s = (self.get_clock().now() - last_odom_time).nanoseconds * 1.0e-9
+                diagnostic = (
+                    f"the last accepted message on {topic} is {age_s:.2f} s old "
+                    f"(timeout {timeout_s:.2f} s). Check FAST-LIO/adapter health and "
+                    "the topic rate."
+                )
             self.get_logger().error(
-                "Corrected odometry is missing or stale; holding hips and commanding wheel REST"
+                "ODOMETRY SAFETY HOLD: " + diagnostic + " Hips are held and wheel hubs are REST."
             )
             self._warned_odometry_unavailable = True
 
     def _terrain_callback(self, message: TerrainWindow) -> None:
         with self._lock:
             self._latest_terrain = message
+            self._last_terrain_time = self.get_clock().now()
+
+    def _stop_for_unavailable_terrain(self) -> None:
+        with self._lock:
+            if self._commanded_hips is not None:
+                self._planner_target_hips = self._commanded_hips.copy()
+                self._planner_transition_start_hips = self._commanded_hips.copy()
+                self._planner_transition_start_ns = self.get_clock().now().nanoseconds
+                self._planner_wheel_rates = np.zeros(4)
+                self._planner_hubs_at_rest = True
+                self._latest_command = self._motor_command(
+                    self._commanded_hips, np.zeros(4), hubs_at_rest=True
+                )
+        if not self._warned_terrain_unavailable:
+            topic = str(self.get_parameter("terrain_window_topic").value)
+            timeout_s = float(self.get_parameter("terrain_window_timeout_s").value)
+            with self._lock:
+                last_terrain_time = self._last_terrain_time
+            if last_terrain_time is None:
+                diagnostic = (
+                    f"no terrain window has arrived on {topic}. Start the local terrain mapper "
+                    f"and verify it with 'ros2 topic echo {topic} --once'."
+                )
+            else:
+                age_s = (self.get_clock().now() - last_terrain_time).nanoseconds * 1.0e-9
+                diagnostic = (
+                    f"the last terrain window on {topic} is {age_s:.2f} s old "
+                    f"(timeout {timeout_s:.2f} s). Check mapper and FAST-LIO health."
+                )
+            self.get_logger().error(
+                "TERRAIN SAFETY HOLD: " + diagnostic + " Hips are held and wheel hubs are REST."
+            )
+            self._warned_terrain_unavailable = True
 
     def _condition_live_terrain(self, terrain, x_m: float, y_m: float, yaw_rad: float):
         """Apply bounded initial-support seeding and isolated-node repair."""
@@ -934,11 +1013,9 @@ class KnownTerrainController(Node):
     def _start_plan_cycle(self) -> None:
         if not self._feedback_is_fresh():
             return
-        if bool(self.get_parameter("use_odometry").value) and not self._odometry_is_fresh():
-            self._set_vicon_trigger(False, "corrected odometry stale")
-            self._stop_for_unavailable_odometry()
+        if not self._required_planner_inputs_are_fresh():
+            self._set_vicon_trigger(False, "required planner input unavailable")
             return
-        self._warned_odometry_unavailable = False
         if self._clock_start_ns is None:
             nominal = np.asarray(self._planner_config.nominal_hip_rad, dtype=float)
             initial_error_deg = np.rad2deg(
@@ -1033,16 +1110,14 @@ class KnownTerrainController(Node):
                         )
                         self._warned_speed_timeout = True
             if bool(self.get_parameter("use_odometry").value):
-                if not self._odometry_is_fresh():
-                    self._set_vicon_trigger(False, "corrected odometry stale")
-                    self._stop_for_unavailable_odometry()
+                if not self._required_planner_inputs_are_fresh():
+                    self._set_vicon_trigger(False, "required planner input unavailable")
                     return
                 with self._lock:
                     odometry = self._latest_odom
                 x, y, yaw, debug_frame_id = self._planner_pose_from_odometry(
                     odometry
                 )
-                self._warned_odometry_unavailable = False
             else:
                 x, y, yaw = self._integrated_open_loop_pose(speed)
                 debug_frame_id = "known_map"
@@ -1073,8 +1148,8 @@ class KnownTerrainController(Node):
             if bool(self.get_parameter("use_terrain_window").value):
                 with self._lock:
                     window = self._latest_terrain
-                if window is None:
-                    self.get_logger().warning("Waiting for /kilin/terrain/local_window; using no new plan", throttle_duration_sec=2.0)
+                if window is None or not self._terrain_is_fresh():
+                    self._stop_for_unavailable_terrain()
                     return
                 wx = float(window.origin.position.x) + float(window.resolution_m) * np.arange(window.width)
                 wy = float(window.origin.position.y) + float(window.resolution_m) * np.arange(window.height)

@@ -64,6 +64,11 @@ def generate_launch_description():
                 ),
             ),
             DeclareLaunchArgument(
+                "terrain_window_timeout_s",
+                default_value="1.0",
+                description="Maximum age of a live TerrainWindow before the controller safety hold.",
+            ),
+            DeclareLaunchArgument(
                 "use_odometry",
                 default_value="false",
                 description=(
@@ -99,6 +104,7 @@ def generate_launch_description():
                             "odometry_relative_origin"
                         ),
                         "use_terrain_window": LaunchConfiguration("use_terrain_window"),
+                        "terrain_window_timeout_s": LaunchConfiguration("terrain_window_timeout_s"),
                         "use_speed_command": LaunchConfiguration("use_speed_command"),
                         "speed_m_s": LaunchConfiguration("speed_m_s"),
                         "run_duration_s": LaunchConfiguration("run_duration_s"),
