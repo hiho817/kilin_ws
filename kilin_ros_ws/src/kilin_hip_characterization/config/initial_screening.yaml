@@ -7,7 +7,7 @@ kilin_hip_characterization:
     state_topic: /motor/state
     run_dir: ""
     strategy_name: phase_a_two_state_baseline
-    strategy_version: 2.1.0
+    strategy_version: 2.2.0
     repetitions: 3
     active_modules: [A, B]
     motion_mode: two_state_cycle
@@ -42,6 +42,15 @@ kilin_hip_characterization:
     # explicitly for lift/contact tests to avoid rapid torque reversal.
     lift_assist_apply_rate_nm_s: 0.0
     lift_assist_release_rate_nm_s: 0.0
+    # Optional direct gain schedule using the same support/lift angle-difference
+    # blend. Defaults equal the global PID gains and are therefore inert.
+    lift_assist_pid_schedule_enabled: false
+    lift_assist_support_kp: 360.0
+    lift_assist_support_ki: 0.0
+    lift_assist_support_kd: 5.0
+    lift_assist_lift_kp: 360.0
+    lift_assist_lift_ki: 0.0
+    lift_assist_lift_kd: 5.0
     # Disabled by default.  When enabled, this assist is evaluated during the
     # normal A-to-B and B-to-A moves only; it does not create a separate phase.
     static_breakaway_policy: disabled

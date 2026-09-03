@@ -8,7 +8,7 @@ One ROS 2 package for low-level hip-transmission characterization, PID and bound
 - Real actuation requires both `armed:=true` and an explicit real command topic.
 - It sends nothing until `/motor/state` is fresh, then captures current hip and hub feedback as its starting state.
 - New-recording convention is `actual_hip_angle_rad = motor_position + position_diff`.
-- Strategy **2.1.0** commands the raw motor-position reference directly. `position_diff` is never fed back into the position target; the optional lift-assist FF mode uses it only as a bounded, observed loading signal.
+- Strategy **2.2.0** commands the raw motor-position reference directly. `position_diff` is never fed back into the position target; the optional lift-assist FF mode and PID schedule use it only as a bounded, observed loading signal.
 - `actual_hip_angle_rad` is still reconstructed and recorded for offline transmission/force analysis. Safety aborts on stale state, non-finite state, motor error code, configured hip-torque bound, or configured raw-motor tracking bound. Abort sends all motors to rest.
 
 The package does not modify `kilin_com_estimator`, the terrain planner, or FAST-LIO2.
@@ -121,7 +121,7 @@ The master runner merges `kilin_hip_batch.defaults` with each test's
 | `run_dir` | string / empty | Evidence folder. Required for an armed direct controller invocation; the helpers set it automatically. |
 | `bag_topics` | string list / six base topics | Topics passed to `ros2 bag record` by `single_runner.py` or `batch_runner.py`. Place it in a direct profile's `ros__parameters`, or master `defaults`; a unit-test override may replace it. The helper removes it before passing the resolved profile to the C++ controller and saves the final list as `bag_topics.txt`. |
 | `strategy_name` | string | Human-readable control/analysis strategy name, recorded in the manifest. |
-| `strategy_version` | numeric string | Revision of that strategy, e.g. `2.1.0`, recorded in the manifest. Use `2.1.0` for this raw-motor, wheel-mode-capable controller; do not reuse `1.0.0` compensated-run profiles. |
+| `strategy_version` | numeric string | Revision of that strategy, e.g. `2.2.0`, recorded in the manifest. Use `2.2.0` for this raw-motor, wheel-mode-capable controller; do not reuse `1.0.0` compensated-run profiles. |
 
 ### Test selection and geometry
 
@@ -192,8 +192,11 @@ policies in one run: `angle_diff_lift_assist` ignores every
 | `lift_assist_lift_max_inward_ff_nm` | nonnegative direct command / `0` | Optional cap for the lifted-leg ramp. `0` means use `max_abs_hip_ff_torque_nm`, so changing only the lift-start value is valid. A nonzero cap must be at least `lift_assist_lift_start_inward_ff_nm`. |
 | `lift_assist_apply_rate_nm_s` | nonnegative direct command per second / `0` | Maximum upward change of applied physical inward FF. `0` disables this limit and applies the target immediately. |
 | `lift_assist_release_rate_nm_s` | nonnegative direct command per second / `0` | Maximum downward change of applied physical inward FF when returning toward support. `0` disables this limit and applies the target immediately. |
+| `lift_assist_pid_schedule_enabled` | bool / `false` | Enables the direct Kp/Ki/Kd schedule below. Requires `feedforward_mode: angle_diff_lift_assist`. It is evaluated in normal test holds/moves only, with no dwell, latch, or time accumulation. |
+| `lift_assist_support_kp/ki/kd` | nonnegative direct motor gains / global gains | PID gains when normalized difference is in the support region. |
+| `lift_assist_lift_kp/ki/kd` | nonnegative direct motor gains / global gains | PID gains when normalized difference is in the lifted region. |
 
-#### Angle-difference lift-assist policy (strategy 2.1.0)
+#### Angle-difference lift-assist policy (strategy 2.2.0)
 
 For each module, the raw recorded difference is
 
@@ -249,6 +252,25 @@ Set either rate to zero to disable that side of the limit. The trace records
 `lift_assist_physical_inward_ff`, lift dwell, latch state, activity, and the
 final motor command `commanded_hip_ff`.
 
+#### Optional direct PID schedule
+
+The PID schedule uses the same instantaneous normalized difference $z_i$ and
+the same linear blend $\lambda$ above, but has **no** dwell, latch, FF ramp,
+or time accumulation:
+
+$$
+K_x(z_i)=(1-\lambda)K_{x,\mathrm{support}}+
+\lambda K_{x,\mathrm{lift}},\qquad x\in\{p,i,d\}.
+$$
+
+It changes only the `kp`, `ki`, and `kd` fields sent in each hip command; it
+does not change motor-position targets or the FF request. Startup, recovery,
+rest, completion, and abort retain global `kp`, `ki`, and `kd`. The schedule
+is disabled by default and its default support/lift values equal those global
+gains, so it is initially inert. Keep both scheduled Ki values at zero in the
+first hardware tests; test Kp or Kd one dimension at a time. The trace records
+`lift_assist_pid_blend`, `scheduled_kp`, `scheduled_ki`, and `scheduled_kd`.
+
 Profile values use a physical convention: positive means inward. The runner
 maps that request to motor torque as
 
@@ -269,7 +291,7 @@ Minimal inert example; change one zero-valued torque parameter at a time:
 
 ```yaml
 strategy_name: angle_diff_lift_assist_screen
-strategy_version: 2.1.0
+strategy_version: 2.2.0
 feedforward_mode: angle_diff_lift_assist
 lift_assist_support_region_end_rad: [-0.0174533, -0.0174533, -0.0174533, -0.0174533]
 lift_assist_lift_region_start_rad: [0.0174533, 0.0174533, 0.0174533, 0.0174533]
@@ -279,6 +301,13 @@ lift_assist_lift_ramp_nm_s: 0.0
 lift_assist_lift_max_inward_ff_nm: 0.0
 lift_assist_apply_rate_nm_s: 0.0
 lift_assist_release_rate_nm_s: 0.0
+lift_assist_pid_schedule_enabled: false
+lift_assist_support_kp: 440.0
+lift_assist_support_ki: 0.0
+lift_assist_support_kd: 20.0
+lift_assist_lift_kp: 440.0
+lift_assist_lift_ki: 0.0
+lift_assist_lift_kd: 20.0
 ```
 
 ### Near-zero breakaway policy (strategy 1.9.1)
