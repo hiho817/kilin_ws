@@ -125,9 +125,9 @@ controller:
   vicon_trigger: true
   debug_publish: true
   fine_tune.enabled: false
-  # Fine-tune runs require a trial-local immutable profile and
+  # Fine-tune runs set this trial-local path and require
   # angle_diff_compensation.gain: 0.0.
-  # fine_tune.profile: fine_tune_profile.yaml
+  fine_tune.profile: ""
 ```
 
 For analytical terrain with wheel odometry, set `fastlio.enabled: false`, keep

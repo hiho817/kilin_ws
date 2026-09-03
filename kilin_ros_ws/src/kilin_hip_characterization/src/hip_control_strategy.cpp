@@ -85,14 +85,25 @@ HipControlOutput HipControlStrategy::update(const HipControlInput & input)
     -config_.max_abs_ff, config_.max_abs_ff);
   if (!config_.pid_schedule_enabled) return output;
 
-  const double target_kp = (1.0 - output.pid_blend) * config_.support_kp + output.pid_blend * config_.lift_kp;
-  const double target_ki = (1.0 - output.pid_blend) * config_.support_ki + output.pid_blend * config_.lift_ki;
-  const double target_kd = (1.0 - output.pid_blend) * config_.support_kd + output.pid_blend * config_.lift_kd;
+  // PID scheduling must use the same hysteretic support/lift state as the
+  // lift-assist force command.  The raw position-difference value is noisy
+  // around the transition band; using its instantaneous blend here previously
+  // made the PID target (and the selected directional rate) flip every command
+  // tick.  A transition now occurs only after crossing a configured endpoint:
+  // lift_start enters lift and support_end returns to support.
+  const double scheduled_blend = state.lift_latched ? 1.0 : 0.0;
+  output.pid_blend = scheduled_blend;
+  const double target_kp = (1.0 - scheduled_blend) * config_.support_kp + scheduled_blend * config_.lift_kp;
+  const double target_ki = (1.0 - scheduled_blend) * config_.support_ki + scheduled_blend * config_.lift_ki;
+  const double target_kd = (1.0 - scheduled_blend) * config_.support_kd + scheduled_blend * config_.lift_kd;
   if (!state.pid_initialized) {
     state.applied_kp = input.kp; state.applied_ki = input.ki; state.applied_kd = input.kd;
     state.previous_blend = 0.0; state.pid_initialized = true;
   }
-  const bool toward_lift = output.pid_blend >= state.previous_blend;
+  // Do not infer direction from blend >= previous_blend.  In particular,
+  // support blend == previous support blend == 0 formerly selected the
+  // to-lift rate.  The latched state is the authoritative direction.
+  const bool toward_lift = state.lift_latched;
   state.applied_kp = rate_limit(state.applied_kp, target_kp,
     toward_lift ? config_.kp_to_lift_rate_per_s : config_.kp_to_support_rate_per_s, dt);
   state.applied_ki = rate_limit(state.applied_ki, target_ki,
