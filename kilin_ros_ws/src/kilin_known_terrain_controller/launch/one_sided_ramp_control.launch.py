@@ -22,6 +22,8 @@ def generate_launch_description():
     hard_motion_limit_s = LaunchConfiguration("hard_motion_limit_s")
     auto_initialize_stance = LaunchConfiguration("auto_initialize_stance")
     debug_publish = LaunchConfiguration("debug_publish")
+    fine_tune_enabled = LaunchConfiguration("fine_tune_enabled")
+    fine_tune_profile = LaunchConfiguration("fine_tune_profile")
     def profile_path(argument_name):
         """Resolve a package-relative profile name or an absolute YAML path."""
         profile = LaunchConfiguration(argument_name)
@@ -74,6 +76,8 @@ def generate_launch_description():
                 "hard_motion_limit_s": hard_motion_limit_s,
                 "known_ramp.auto_initialize_stance": auto_initialize_stance,
                 "debug_publish_enabled": debug_publish,
+                "fine_tune.enabled": fine_tune_enabled,
+                "fine_tune.profile_path": fine_tune_profile,
             },
         ],
         remappings=[("/clock", "/kilin/isaac/clock")],
@@ -101,6 +105,8 @@ def generate_launch_description():
                 "hard_motion_limit_s": hard_motion_limit_s,
                 "known_ramp.auto_initialize_stance": auto_initialize_stance,
                 "debug_publish_enabled": debug_publish,
+                "fine_tune.enabled": fine_tune_enabled,
+                "fine_tune.profile_path": fine_tune_profile,
             },
         ],
         condition=IfCondition(PythonExpression(["'", target, "' == 'real'"])),
@@ -158,6 +164,19 @@ def generate_launch_description():
                 "debug_publish",
                 default_value="false",
                 description="Publish lightweight planned-path and footprint diagnostics",
+            ),
+            DeclareLaunchArgument(
+                "fine_tune_enabled",
+                default_value="false",
+                description="Apply the shared C++ hip fine-tuning strategy in this controller's publish tick",
+            ),
+            DeclareLaunchArgument(
+                "fine_tune_profile",
+                default_value="",
+                description=(
+                    "Absolute immutable kilin_hip_characterization profile path; "
+                    "required only when fine_tune_enabled is true"
+                ),
             ),
             DeclareLaunchArgument(
                 "terrain_profile",

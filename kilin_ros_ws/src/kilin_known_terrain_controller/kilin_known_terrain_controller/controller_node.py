@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import sys
 from threading import RLock, Thread
+from pathlib import Path as FilePath
 
 import numpy as np
 import rclpy
+import yaml
 from geometry_msgs.msg import Point, PoseStamped
 from kilin_msgs.msg import MotorCmdStamped, MotorStateStamped
 from kilin_msgs.msg import TerrainWindow
@@ -15,6 +17,11 @@ from sensor_msgs.msg import JointState
 from visualization_msgs.msg import Marker, MarkerArray
 
 from .command_mapping import radians_per_second_to_rpm10, validate_four
+from kilin_hip_characterization import (
+    ControlSample,
+    FineTuneStrategy,
+    strategy_config_from_parameters,
+)
 from .hip_test import (
     bounded_position_step,
     named_hip_positions,
@@ -95,6 +102,8 @@ class KnownTerrainController(Node):
         # otherwise attempts to acquire the same Lock again and deadlocks the
         # 10 Hz control cycle before it can publish a command.
         self._lock = RLock()
+        self._fine_tune_strategy = None
+        self._configure_fine_tuning()
         # Do not cache a nominal pose here.  The publish timer runs faster than
         # the control timer, so a cached 45-degree stance could otherwise be
         # sent for one or more cycles immediately after the first feedback.
@@ -177,6 +186,12 @@ class KnownTerrainController(Node):
             "Motion modes remain silent until fresh hip feedback has been captured "
             "by a control cycle."
         )
+        if self._fine_tune_strategy is not None:
+            self.get_logger().info(
+                "Hip fine tuning is enabled in the existing publish tick; "
+                f"strategy={self._fine_tune_strategy_name} "
+                f"v{self._fine_tune_strategy_version}; the strategy owns no separate timer."
+            )
         self.get_logger().info(
             "Active hip PID: "
             f"kp={self.get_parameter('hip_kp').value}, "
@@ -281,6 +296,10 @@ class KnownTerrainController(Node):
             "hip_kd": 5.0,
             "angle_diff_compensation.gain": 0.0,
             "angle_diff_compensation.maximum_abs_rad": 0.10,
+            # Fine tuning is loaded from one immutable characterization
+            # profile, rather than duplicating its evolving parameter set here.
+            "fine_tune.enabled": False,
+            "fine_tune.profile_path": "",
             "position_mode": 4,
             "velocity_mode": 5,
             "rest_mode": 0,
@@ -326,6 +345,44 @@ class KnownTerrainController(Node):
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
+
+    def _configure_fine_tuning(self) -> None:
+        """Load the shared C++ strategy once; the controller owns its tick."""
+        if not bool(self.get_parameter("fine_tune.enabled").value):
+            return
+        if self._feedback_source != "motor_state":
+            raise ValueError("fine_tune.enabled requires feedback_source:=motor_state")
+        if float(self.get_parameter("angle_diff_compensation.gain").value) != 0.0:
+            raise ValueError(
+                "fine_tune.enabled cannot be combined with angle_diff_compensation.gain; "
+                "position_diff must have one control policy"
+            )
+        profile_path = FilePath(
+            str(self.get_parameter("fine_tune.profile_path").value)
+        ).expanduser()
+        if not profile_path.is_file():
+            raise ValueError(
+                "fine_tune.enabled requires fine_tune.profile_path to name an existing "
+                "immutable hip-characterization YAML profile"
+            )
+        with profile_path.open("r", encoding="utf-8") as profile_file:
+            document = yaml.safe_load(profile_file)
+        try:
+            parameters = document["kilin_hip_characterization"]["ros__parameters"]
+        except (KeyError, TypeError) as exc:
+            raise ValueError(
+                "fine-tune profile must contain kilin_hip_characterization.ros__parameters"
+            ) from exc
+        strategy = FineTuneStrategy()
+        config = strategy_config_from_parameters(parameters)
+        if not config.enabled:
+            raise ValueError(
+                "fine-tune profile must select feedforward_mode: angle_diff_lift_assist"
+            )
+        strategy.configure(config)
+        self._fine_tune_strategy = strategy
+        self._fine_tune_strategy_name = str(parameters.get("strategy_name", "unnamed"))
+        self._fine_tune_strategy_version = str(parameters.get("strategy_version", "unknown"))
 
     def _load_planner(self) -> None:
         from kilin_motion_planner.config import PlannerConfig
@@ -1241,6 +1298,44 @@ class KnownTerrainController(Node):
             leg.hub.motor_mode = int(self.get_parameter(hub_mode_parameter).value)
         return message
 
+    def _apply_fine_tuning(self, message: MotorCmdStamped, normal_phase: bool) -> None:
+        """Synchronously apply the C++ strategy in this controller's publish tick."""
+        strategy = self._fine_tune_strategy
+        if strategy is None:
+            return
+        with self._lock:
+            motor_positions = None if self._measured_hips is None else self._measured_hips.copy()
+            position_diffs = (
+                None
+                if self._measured_position_diff is None
+                else self._measured_position_diff.copy()
+            )
+        if motor_positions is None or position_diffs is None:
+            return
+        legs = (message.module_a, message.module_b, message.module_c, message.module_d)
+        now_s = self.get_clock().now().nanoseconds * 1.0e-9
+        outward_sign = (-1.0, -1.0, 1.0, 1.0)
+        for module, leg in enumerate(legs):
+            target = float(leg.hip.position)
+            sample = ControlSample()
+            sample.module = module
+            sample.motor_position = float(motor_positions[module])
+            sample.position_diff = float(position_diffs[module])
+            sample.commanded_motor_position = target
+            sample.now_s = now_s
+            sample.active = True
+            sample.normal_phase = normal_phase
+            outward_magnitude = outward_sign[module] * target
+            sample.outward_range = 0.0 <= outward_magnitude <= np.pi / 2.0
+            sample.kp = float(leg.hip.kp)
+            sample.ki = float(leg.hip.ki)
+            sample.kd = float(leg.hip.kd)
+            result = strategy.step(sample)
+            leg.hip.kp = result.kp
+            leg.hip.ki = result.ki
+            leg.hip.kd = result.kd
+            leg.hip.torque += result.motor_ff
+
     def _publish_latest(self) -> None:
         if not bool(self.get_parameter("armed").value):
             return
@@ -1322,6 +1417,11 @@ class KnownTerrainController(Node):
                 )
             else:
                 message = self._latest_command
+        # Fine tuning runs once per existing publish callback (50 Hz by
+        # default), not in an independent timer. It is active only after the
+        # planner owns the command; stance initialization and all other modes
+        # reset/inhibit the strategy state.
+        self._apply_fine_tuning(message, planner_control_active)
         now = self.get_clock().now().to_msg()
         message.header.seq += 1
         message.header.time = now

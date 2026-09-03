@@ -86,6 +86,17 @@ def load_trial_config(trial_dir: Path) -> dict[str, Any]:
             raise ValueError(
                 f"controller.{key} does not exist in this trial: {trial_dir / relative}"
             )
+    if bool(controller.get("fine_tune.enabled", False)):
+        relative = controller.get("fine_tune.profile")
+        if not isinstance(relative, str) or not relative or not (trial_dir / relative).is_file():
+            raise ValueError(
+                "controller.fine_tune.profile must name an existing trial-local YAML file "
+                "when controller.fine_tune.enabled is true"
+            )
+        if float(controller.get("angle_diff_compensation.gain", 0.0)) != 0.0:
+            raise ValueError(
+                "fine tuning cannot be combined with angle_diff_compensation.gain"
+            )
     if config["fastlio"].get("enabled", True):
         relative = config["fastlio"].get("config")
         if not isinstance(relative, str) or not (trial_dir / relative).is_file():
@@ -258,7 +269,7 @@ class TrialRunner:
         fastlio = self.config["fastlio"]
         topic = str(fastlio.get("required_odometry_topic", "/kilin/fastlio/odometry"))
         timeout_s = float(fastlio.get("required_odometry_wait_s", 8.0))
-        self._wait_for_first_message(topic, timeout_s, "fastlio_readiness", "FAST-LIO")
+        self._wait_for_first_message(topic, timeout_s, "odometry_readiness", "odometry source")
 
     def _start_bag(self) -> None:
         config = self.config["recording"]
@@ -306,6 +317,16 @@ class TrialRunner:
         ):
             if config_key in controller:
                 command.append(f"{launch_key}:={_ros_value(controller[config_key])}")
+        for key in ("odometry_topic", "odometry_required_frame"):
+            if key in controller:
+                command.append(f"{key}:={_ros_value(controller[key])}")
+        if bool(controller.get("fine_tune.enabled", False)):
+            command.extend(
+                [
+                    "fine_tune_enabled:=true",
+                    f"fine_tune_profile:={self.trial_dir / controller['fine_tune.profile']}",
+                ]
+            )
         command.extend(
             [
                 f"terrain_profile:={self.trial_dir / controller['terrain_profile']}",

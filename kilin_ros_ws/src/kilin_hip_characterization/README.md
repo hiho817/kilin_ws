@@ -13,6 +13,21 @@ One ROS 2 package for low-level hip-transmission characterization, PID and bound
 
 The package does not modify `kilin_com_estimator`, the terrain planner, or FAST-LIO2.
 
+## Shared strategy timing and Python use
+
+The angle-difference lift-assist and PID schedule are implemented in the
+clock-free C++ `HipControlStrategy` library.  The characterization runner calls
+it from its existing 100 Hz control tick.  Python controllers import the same
+library through `pybind11` and must call `FineTuneStrategy.step(sample)` once
+from their own command-publication tick, supplying that tick's timestamp in
+`sample.now_s`; the strategy never creates a timer or publishes a command.
+
+The known-terrain controller therefore plans at 10 Hz but interpolates and
+publishes at 100 Hz in its supplied one-sided-ramp profile.  When enabled with
+an immutable `angle_diff_lift_assist` profile, it invokes the same strategy on
+each 100 Hz publication.  Strategy rate limits are expressed per second, so
+they use the caller-provided elapsed time rather than assuming a fixed rate.
+
 ## Phase-A campaign
 
 The runner performs a two-state cycle for each repetition:

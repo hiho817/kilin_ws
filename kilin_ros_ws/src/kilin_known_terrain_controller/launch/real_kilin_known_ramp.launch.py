@@ -103,9 +103,29 @@ def generate_launch_description():
                 ),
             ),
             DeclareLaunchArgument(
+                "odometry_topic",
+                default_value="/kilin/fastlio/odometry",
+                description="Progress odometry topic; use the verified wheel or FAST-LIO topic.",
+            ),
+            DeclareLaunchArgument(
+                "odometry_required_frame",
+                default_value="map",
+                description="Required odometry header frame; set explicitly for wheel odometry.",
+            ),
+            DeclareLaunchArgument(
                 "odometry_relative_origin",
                 default_value="true",
                 description="Zero corrected odometry when ramp motion begins.",
+            ),
+            DeclareLaunchArgument(
+                "fine_tune_enabled",
+                default_value="false",
+                description="Call the shared C++ fine-tune strategy in the existing 100 Hz publish tick.",
+            ),
+            DeclareLaunchArgument(
+                "fine_tune_profile",
+                default_value="",
+                description="Absolute immutable kilin_hip_characterization strategy profile; required when enabled.",
             ),
             Node(
                 package="kilin_known_terrain_controller",
@@ -124,8 +144,8 @@ def generate_launch_description():
                         "feedback_source": "motor_state",
                         "motor_state_topic": "/motor/state",
                         "use_odometry": LaunchConfiguration("use_odometry"),
-                        "odometry_topic": "/kilin/fastlio/odometry",
-                        "odometry_required_frame": "map",
+                        "odometry_topic": LaunchConfiguration("odometry_topic"),
+                        "odometry_required_frame": LaunchConfiguration("odometry_required_frame"),
                         "odometry_relative_origin": LaunchConfiguration(
                             "odometry_relative_origin"
                         ),
@@ -153,6 +173,8 @@ def generate_launch_description():
                         "angle_diff_compensation.maximum_abs_rad": LaunchConfiguration(
                             "angle_diff_compensation_maximum_abs_rad"
                         ),
+                        "fine_tune.enabled": LaunchConfiguration("fine_tune_enabled"),
+                        "fine_tune.profile_path": LaunchConfiguration("fine_tune_profile"),
                     },
                 ],
             ),

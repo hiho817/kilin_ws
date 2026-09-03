@@ -105,6 +105,14 @@ def _trial_actions(context):
     ):
         if config_key in controller:
             launch_arguments[launch_key] = _value(controller[config_key])
+    for key in ("odometry_topic", "odometry_required_frame"):
+        if key in controller:
+            launch_arguments[key] = _value(controller[key])
+    if bool(controller.get("fine_tune.enabled", False)):
+        launch_arguments["fine_tune_enabled"] = "true"
+        launch_arguments["fine_tune_profile"] = str(
+            trial_dir / controller["fine_tune.profile"]
+        )
     actions.append(
         TimerAction(
             period=float(controller["startup_wait_s"]),

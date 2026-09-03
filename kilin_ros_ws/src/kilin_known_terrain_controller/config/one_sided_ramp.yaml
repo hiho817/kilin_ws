@@ -41,7 +41,9 @@ kilin_known_terrain_controller:
     run_duration_s: 22.0
     hard_motion_limit_s: 22.0
     planning_rate_hz: 10.0
-    publish_rate_hz: 50.0
+    # Planner updates remain at 10 Hz; command interpolation and the shared
+    # fine-tune strategy run on every 100 Hz publish tick.
+    publish_rate_hz: 100.0
     planner_dt_s: 0.1
     horizon_steps: 5
     horizon_knot_spacing_m: 0.05

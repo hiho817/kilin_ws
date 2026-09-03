@@ -113,6 +113,8 @@ controller:
   terrain_profile: terrain_profile.yaml
   hip_pid_profile: hip_pid.yaml
   use_odometry: true
+  odometry_topic: /kilin/fastlio/odometry
+  odometry_required_frame: map
   odometry_relative_origin: true
   use_terrain_window: true
   terrain_window_timeout_s: 1.0
@@ -122,7 +124,18 @@ controller:
   hard_motion_limit_s: 35.0
   vicon_trigger: true
   debug_publish: true
+  fine_tune.enabled: false
+  # Fine-tune runs require a trial-local immutable profile and
+  # angle_diff_compensation.gain: 0.0.
+  # fine_tune.profile: fine_tune_profile.yaml
 ```
+
+For analytical terrain with wheel odometry, set `fastlio.enabled: false`, keep
+the mapper disabled, and set both `fastlio.required_odometry_topic` and
+`controller.odometry_topic` to the verified wheel-odometry topic. The former
+is the runner's generic odometry-readiness topic even when FAST-LIO is not
+started. The 2026-09-04 log README is the current manifest-first guide for the
+wheel/FAST-LIO and fine-tune on/off matrix.
 
 For Isaac simulation, select its target explicitly:
 
@@ -371,7 +384,10 @@ check.
 For reproducible real trials, pass absolute per-trial paths for
 `terrain_profile` and `hip_pid_profile`.  The latter is deliberately PID-only:
 it may contain `hip_kp`, `hip_ki`, and `hip_kd`, but not characterization
-strategy, torque feed-forward, or angle-difference compensation.
+strategy or torque feed-forward. Optional shared fine tuning instead uses one
+separate immutable `fine_tune_profile` from `kilin_hip_characterization`; the
+trial manifest owns that file path and rejects simultaneous legacy
+angle-difference compensation.
 
 ### Launch arguments
 
@@ -454,7 +470,7 @@ arguments.  The generic launch also has the two arguments marked `generic`.
 | `speed_m_s` | `0.18` m/s | non-negative m/s | Fixed-speed planner input. | Use launch argument. |
 | `startup_delay_s` | `1.0` s | non-negative seconds | Wait after planner readiness before timed motion. | No. |
 | `run_duration_s`, `hard_motion_limit_s` | `22`, `22` s | positive seconds | Fixed-speed requested duration and hard timeout. | Use launch arguments. |
-| `planning_rate_hz`, `publish_rate_hz` | `10`, `50` Hz | positive Hz | Planning timer and motor publication timer. | No without profiling. |
+| `planning_rate_hz`, `publish_rate_hz` | `10`, `50` Hz (the supplied one-sided-ramp profile sets publication to `100` Hz) | positive Hz | Planning timer and motor publication timer. Hip targets are interpolated between planner updates; when enabled, shared fine tuning executes once per publication tick. | No without profiling. |
 | `planner_dt_s` | `0.1` s | positive seconds | Optimizer knot time step. | No without planner validation. |
 | `horizon_steps` | `5` | integer ≥ 2 | Number of horizon knots. | No without planner validation. |
 | `horizon_knot_spacing_m` | `0.05` m | positive m | Distance between knots; independent of speed. | No without planner validation. |
