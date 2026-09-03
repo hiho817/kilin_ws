@@ -48,7 +48,7 @@ class CampaignRunner final : public rclcpp::Node {
     state_topic_ = declare_parameter<std::string>("state_topic", "/motor/state");
     run_dir_ = declare_parameter<std::string>("run_dir", "");
     strategy_name_ = declare_parameter<std::string>("strategy_name", "phase_a_two_state_baseline");
-    strategy_version_ = declare_parameter<std::string>("strategy_version", "2.2.0");
+    strategy_version_ = declare_parameter<std::string>("strategy_version", "2.5.0");
     active_modules_ = declare_parameter<std::vector<std::string>>("active_modules", {"A", "B"});
     repetitions_ = declare_parameter<int>("repetitions", 3);
     motion_mode_ = declare_parameter<std::string>("motion_mode", "two_state_cycle");
@@ -77,6 +77,15 @@ class CampaignRunner final : public rclcpp::Node {
     lift_assist_lift_kp_ = declare_parameter<double>("lift_assist_lift_kp", kp_);
     lift_assist_lift_ki_ = declare_parameter<double>("lift_assist_lift_ki", ki_);
     lift_assist_lift_kd_ = declare_parameter<double>("lift_assist_lift_kd", kd_);
+    lift_assist_pid_kp_rate_ = declare_parameter<double>("lift_assist_pid_kp_rate_per_s", 0.0);
+    lift_assist_pid_ki_rate_ = declare_parameter<double>("lift_assist_pid_ki_rate_per_s", 0.0);
+    lift_assist_pid_kd_rate_ = declare_parameter<double>("lift_assist_pid_kd_rate_per_s", 0.0);
+    kp_to_lift_rate_ = declare_parameter<double>("kp_to_lift_rate_per_s", -1.0);
+    kp_to_support_rate_ = declare_parameter<double>("kp_to_support_rate_per_s", -1.0);
+    ki_to_lift_rate_ = declare_parameter<double>("ki_to_lift_rate_per_s", -1.0);
+    ki_to_support_rate_ = declare_parameter<double>("ki_to_support_rate_per_s", -1.0);
+    kd_to_lift_rate_ = declare_parameter<double>("kd_to_lift_rate_per_s", -1.0);
+    kd_to_support_rate_ = declare_parameter<double>("kd_to_support_rate_per_s", -1.0);
     lift_assist_support_inward_ff_ = declare_parameter<double>("lift_assist_support_inward_ff_nm", 0.0);
     lift_assist_lift_start_inward_ff_ = declare_parameter<double>("lift_assist_lift_start_inward_ff_nm", 0.0);
     lift_assist_lift_ramp_ = declare_parameter<double>("lift_assist_lift_ramp_nm_s", 0.0);
@@ -178,9 +187,21 @@ class CampaignRunner final : public rclcpp::Node {
           (!std::isfinite(lift_assist_support_kp_) || !std::isfinite(lift_assist_support_ki_) ||
            !std::isfinite(lift_assist_support_kd_) || !std::isfinite(lift_assist_lift_kp_) ||
            !std::isfinite(lift_assist_lift_ki_) || !std::isfinite(lift_assist_lift_kd_) ||
+           !std::isfinite(lift_assist_pid_kp_rate_) || !std::isfinite(lift_assist_pid_ki_rate_) ||
+           !std::isfinite(lift_assist_pid_kd_rate_) || !std::isfinite(kp_to_lift_rate_) ||
+           !std::isfinite(kp_to_support_rate_) || !std::isfinite(ki_to_lift_rate_) ||
+           !std::isfinite(ki_to_support_rate_) || !std::isfinite(kd_to_lift_rate_) ||
+           !std::isfinite(kd_to_support_rate_) ||
            lift_assist_support_kp_ < 0.0 || lift_assist_support_ki_ < 0.0 || lift_assist_support_kd_ < 0.0 ||
-           lift_assist_lift_kp_ < 0.0 || lift_assist_lift_ki_ < 0.0 || lift_assist_lift_kd_ < 0.0)) {
-        throw std::runtime_error("invalid angle_diff_lift_assist PID schedule: all support/lift Kp, Ki, and Kd values must be finite and nonnegative");
+           lift_assist_lift_kp_ < 0.0 || lift_assist_lift_ki_ < 0.0 || lift_assist_lift_kd_ < 0.0 ||
+           lift_assist_pid_kp_rate_ < 0.0 || lift_assist_pid_ki_rate_ < 0.0 || lift_assist_pid_kd_rate_ < 0.0 ||
+           (kp_to_lift_rate_ < 0.0 && kp_to_lift_rate_ != -1.0) ||
+           (kp_to_support_rate_ < 0.0 && kp_to_support_rate_ != -1.0) ||
+           (ki_to_lift_rate_ < 0.0 && ki_to_lift_rate_ != -1.0) ||
+           (ki_to_support_rate_ < 0.0 && ki_to_support_rate_ != -1.0) ||
+           (kd_to_lift_rate_ < 0.0 && kd_to_lift_rate_ != -1.0) ||
+           (kd_to_support_rate_ < 0.0 && kd_to_support_rate_ != -1.0))) {
+        throw std::runtime_error("invalid angle_diff_lift_assist PID schedule: gains/rates must be finite; directional rates must be nonnegative or -1 for legacy symmetric fallback");
       }
       for (size_t i = 0; i < kModuleNames.size(); ++i) {
         if (!std::isfinite(lift_assist_support_region_end_[i]) || !std::isfinite(lift_assist_lift_region_start_[i]) ||
@@ -343,6 +364,7 @@ class CampaignRunner final : public rclcpp::Node {
     return feedforward_mode_ == "angle_diff_lift_assist" ? normalTestPhase() : wheelMotionPhase();
   }
   struct ScheduledPid { double kp; double ki; double kd; double blend; };
+  struct AppliedScheduledPid { double kp; double ki; double kd; double last_target_blend; bool initialized; };
   ScheduledPid scheduledPid(size_t i, double target_rad) const {
     ScheduledPid result{kp_, ki_, kd_, 0.0};
     if (!lift_assist_pid_schedule_enabled_ || feedforward_mode_ != "angle_diff_lift_assist" ||
@@ -357,6 +379,41 @@ class CampaignRunner final : public rclcpp::Node {
     result.ki = (1.0 - result.blend) * lift_assist_support_ki_ + result.blend * lift_assist_lift_ki_;
     result.kd = (1.0 - result.blend) * lift_assist_support_kd_ + result.blend * lift_assist_lift_kd_;
     return result;
+  }
+
+  static double rateLimit(double current, double target, double transition_rate_per_s, double dt_s) {
+    const double rate_per_s = transition_rate_per_s;
+    if (rate_per_s <= 0.0) return target;
+    const double step = rate_per_s * dt_s;
+    return current + std::clamp(target - current, -step, step);
+  }
+
+  static double directionalRate(double directional_rate, double legacy_symmetric_rate) {
+    return directional_rate >= 0.0 ? directional_rate : legacy_symmetric_rate;
+  }
+
+  ScheduledPid applyScheduledPidRateLimit(size_t i, const ScheduledPid &target, double dt_s) {
+    const bool schedule_active = lift_assist_pid_schedule_enabled_ &&
+                                 feedforward_mode_ == "angle_diff_lift_assist" && normalTestPhase();
+    auto &applied = applied_scheduled_pid_[i];
+    if (!schedule_active) {
+      applied.initialized = false;
+      return target;
+    }
+    if (!applied.initialized) {
+      // Always begin a normal test phase at global gains.  A nonzero limit then
+      // makes entry to the support/lift schedule gradual as well.
+      applied = AppliedScheduledPid{kp_, ki_, kd_, 0.0, true};
+    }
+    const bool support_to_lift = target.blend >= applied.last_target_blend;
+    applied.kp = rateLimit(applied.kp, target.kp,
+                           directionalRate(support_to_lift ? kp_to_lift_rate_ : kp_to_support_rate_, lift_assist_pid_kp_rate_), dt_s);
+    applied.ki = rateLimit(applied.ki, target.ki,
+                           directionalRate(support_to_lift ? ki_to_lift_rate_ : ki_to_support_rate_, lift_assist_pid_ki_rate_), dt_s);
+    applied.kd = rateLimit(applied.kd, target.kd,
+                           directionalRate(support_to_lift ? kd_to_lift_rate_ : kd_to_support_rate_, lift_assist_pid_kd_rate_), dt_s);
+    applied.last_target_blend = target.blend;
+    return ScheduledPid{applied.kp, applied.ki, applied.kd, target.blend};
   }
 
   double wheelRateRadS(double hip_rate_rad_s, double commanded_hip_rad) const {
@@ -466,9 +523,13 @@ class CampaignRunner final : public rclcpp::Node {
       // the state/logging path as the reconstructed actual hip angle, but it is
       // not part of this low-level position-control loop.
       legs[i].hip.position = safe_target;
-      const ScheduledPid pid = scheduledPid(i, safe_target);
+      const ScheduledPid pid_target = scheduledPid(i, safe_target);
+      const ScheduledPid pid = applyScheduledPidRateLimit(i, pid_target, dt_s);
       legs[i].hip.kp = pid.kp; legs[i].hip.ki = pid.ki; legs[i].hip.kd = pid.kd;
       lift_assist_pid_blend_trace_[i] = pid.blend;
+      scheduled_target_kp_trace_[i] = pid_target.kp;
+      scheduled_target_ki_trace_[i] = pid_target.ki;
+      scheduled_target_kd_trace_[i] = pid_target.kd;
       scheduled_kp_trace_[i] = pid.kp;
       scheduled_ki_trace_[i] = pid.ki;
       scheduled_kd_trace_[i] = pid.kd;
@@ -752,7 +813,7 @@ class CampaignRunner final : public rclcpp::Node {
     if (run_dir_.empty()) return;
     fs::create_directories(run_dir_);
     trace_.open(fs::path(run_dir_) / "command_state_trace.csv");
-    trace_ << "time_s,phase,trial,module,commanded_motor_rad,motor_position_rad,position_diff_rad,actual_hip_angle_rad,hip_torque,commanded_hip_ff,raw_hip_velocity_rad_s,filtered_hip_velocity_rad_s,breakaway_velocity_used_rad_s,static_breakaway_ff,static_breakaway_dwell_s,static_breakaway_released,lift_assist_normalized_diff_rad,lift_assist_target_inward_ff,lift_assist_physical_inward_ff,lift_assist_dwell_s,lift_assist_active,lift_assist_latched,lift_assist_pid_blend,scheduled_kp,scheduled_ki,scheduled_kd,hub_mode,commanded_hub_velocity_rpm10,commanded_hub_torque,hub_position_rad,hub_velocity_feedback,hub_torque_feedback,hub_feedback_mode,hub_error_code,hub_travel_command_rad,hub_travel_feedback_rad,hub_travel_ratio,hub_travel_valid,error_code\n";
+    trace_ << "time_s,phase,trial,module,commanded_motor_rad,motor_position_rad,position_diff_rad,actual_hip_angle_rad,hip_torque,commanded_hip_ff,raw_hip_velocity_rad_s,filtered_hip_velocity_rad_s,breakaway_velocity_used_rad_s,static_breakaway_ff,static_breakaway_dwell_s,static_breakaway_released,lift_assist_normalized_diff_rad,lift_assist_target_inward_ff,lift_assist_physical_inward_ff,lift_assist_dwell_s,lift_assist_active,lift_assist_latched,lift_assist_pid_blend,scheduled_target_kp,scheduled_target_ki,scheduled_target_kd,scheduled_kp,scheduled_ki,scheduled_kd,hub_mode,commanded_hub_velocity_rpm10,commanded_hub_torque,hub_position_rad,hub_velocity_feedback,hub_torque_feedback,hub_feedback_mode,hub_error_code,hub_travel_command_rad,hub_travel_feedback_rad,hub_travel_ratio,hub_travel_valid,error_code\n";
     hub_travel_summary_.open(fs::path(run_dir_) / "hub_travel_summary.csv");
     hub_travel_summary_ << "phase,trial,module,start_hub_position_rad,end_hub_position_rad,commanded_travel_rad,feedback_travel_rad,travel_ratio,valid,final_hub_torque,final_hub_velocity,hub_error_code\n";
     std::ofstream manifest(fs::path(run_dir_) / "trial_manifest.yaml");
@@ -783,6 +844,15 @@ class CampaignRunner final : public rclcpp::Node {
              << "\nlift_assist_lift_kp: " << lift_assist_lift_kp_
              << "\nlift_assist_lift_ki: " << lift_assist_lift_ki_
              << "\nlift_assist_lift_kd: " << lift_assist_lift_kd_
+             << "\nlift_assist_pid_kp_rate_per_s: " << lift_assist_pid_kp_rate_
+             << "\nlift_assist_pid_ki_rate_per_s: " << lift_assist_pid_ki_rate_
+             << "\nlift_assist_pid_kd_rate_per_s: " << lift_assist_pid_kd_rate_
+             << "\nkp_to_lift_rate_per_s: " << kp_to_lift_rate_
+             << "\nkp_to_support_rate_per_s: " << kp_to_support_rate_
+             << "\nki_to_lift_rate_per_s: " << ki_to_lift_rate_
+             << "\nki_to_support_rate_per_s: " << ki_to_support_rate_
+             << "\nkd_to_lift_rate_per_s: " << kd_to_lift_rate_
+             << "\nkd_to_support_rate_per_s: " << kd_to_support_rate_
              << "\nstatic_breakaway_policy: " << static_breakaway_policy_
              << "\nstatic_breakaway_steps_outward_nm: [" << static_breakaway_steps_outward_[0] << ", " << static_breakaway_steps_outward_[1] << ", " << static_breakaway_steps_outward_[2] << "]"
              << "\nstatic_breakaway_steps_inward_nm: [" << static_breakaway_steps_inward_[0] << ", " << static_breakaway_steps_inward_[1] << ", " << static_breakaway_steps_inward_[2] << "]"
@@ -819,8 +889,9 @@ class CampaignRunner final : public rclcpp::Node {
              << lift_assist_normalized_diff_trace_[i] << ',' << lift_assist_target_inward_ff_trace_[i] << ','
              << lift_assist_physical_inward_ff_trace_[i] << ',' << lift_assist_dwell_trace_[i] << ','
              << lift_assist_active_trace_[i] << ',' << lift_assist_latched_trace_[i] << ','
-             << lift_assist_pid_blend_trace_[i] << ',' << scheduled_kp_trace_[i] << ','
-             << scheduled_ki_trace_[i] << ',' << scheduled_kd_trace_[i] << ','
+             << lift_assist_pid_blend_trace_[i] << ',' << scheduled_target_kp_trace_[i] << ','
+             << scheduled_target_ki_trace_[i] << ',' << scheduled_target_kd_trace_[i] << ','
+             << scheduled_kp_trace_[i] << ',' << scheduled_ki_trace_[i] << ',' << scheduled_kd_trace_[i] << ','
              << commanded_hub_mode_[i] << ',' << commanded_hub_velocity_rpm10_[i] << ','
              << commanded_hub_torque_[i] << ',' << hubs_[i].position << ',' << hubs_[i].velocity << ','
              << hubs_[i].torque << ',' << hubs_[i].mode << ',' << hubs_[i].error << ','
@@ -839,12 +910,13 @@ class CampaignRunner final : public rclcpp::Node {
   std::array<HubState, 4> hubs_{};
   std::array<BreakawayState, 4> breakaway_{};
   std::array<LiftAssistState, 4> lift_assist_{};
+  std::array<AppliedScheduledPid, 4> applied_scheduled_pid_{};
   std::array<HubTravelState, 4> hub_travel_{};
-  std::array<double, 4> commanded_{}, move_start_{}, previous_target_{}, commanded_hub_velocity_rpm10_{}, commanded_hub_torque_{}, commanded_hip_ff_{}, commanded_static_breakaway_ff_{}, raw_hip_velocity_trace_{}, filtered_hip_velocity_{}, breakaway_velocity_used_trace_{}, breakaway_dwell_trace_{}, lift_assist_normalized_diff_trace_{}, lift_assist_target_inward_ff_trace_{}, lift_assist_physical_inward_ff_trace_{}, lift_assist_dwell_trace_{}, lift_assist_pid_blend_trace_{}, scheduled_kp_trace_{}, scheduled_ki_trace_{}, scheduled_kd_trace_{};
+  std::array<double, 4> commanded_{}, move_start_{}, previous_target_{}, commanded_hub_velocity_rpm10_{}, commanded_hub_torque_{}, commanded_hip_ff_{}, commanded_static_breakaway_ff_{}, raw_hip_velocity_trace_{}, filtered_hip_velocity_{}, breakaway_velocity_used_trace_{}, breakaway_dwell_trace_{}, lift_assist_normalized_diff_trace_{}, lift_assist_target_inward_ff_trace_{}, lift_assist_physical_inward_ff_trace_{}, lift_assist_dwell_trace_{}, lift_assist_pid_blend_trace_{}, scheduled_target_kp_trace_{}, scheduled_target_ki_trace_{}, scheduled_target_kd_trace_{}, scheduled_kp_trace_{}, scheduled_ki_trace_{}, scheduled_kd_trace_{};
   std::array<int, 4> commanded_hub_mode_{}, breakaway_released_trace_{}, lift_assist_active_trace_{}, lift_assist_latched_trace_{};
   double lift_assist_support_inward_ff_{0.0}, lift_assist_lift_start_inward_ff_{0.0}, lift_assist_lift_ramp_{0.0}, lift_assist_lift_max_inward_ff_{0.0}, lift_assist_apply_rate_{0.0}, lift_assist_release_rate_{0.0};
   bool lift_assist_pid_schedule_enabled_{false};
-  double lift_assist_support_kp_{0.0}, lift_assist_support_ki_{0.0}, lift_assist_support_kd_{0.0}, lift_assist_lift_kp_{0.0}, lift_assist_lift_ki_{0.0}, lift_assist_lift_kd_{0.0};
+  double lift_assist_support_kp_{0.0}, lift_assist_support_ki_{0.0}, lift_assist_support_kd_{0.0}, lift_assist_lift_kp_{0.0}, lift_assist_lift_ki_{0.0}, lift_assist_lift_kd_{0.0}, lift_assist_pid_kp_rate_{0.0}, lift_assist_pid_ki_rate_{0.0}, lift_assist_pid_kd_rate_{0.0}, kp_to_lift_rate_{-1.0}, kp_to_support_rate_{-1.0}, ki_to_lift_rate_{-1.0}, ki_to_support_rate_{-1.0}, kd_to_lift_rate_{-1.0}, kd_to_support_rate_{-1.0};
   bool hub_travel_validation_enabled_{true};
   int invalid_hub_travel_segments_{0};
   Phase phase_{Phase::kWaitForState};

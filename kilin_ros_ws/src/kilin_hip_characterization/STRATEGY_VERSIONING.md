@@ -5,7 +5,7 @@ This package is the shared unit-test package for (1) hip tracking/PID/feedforwar
 ## Safety model
 
 - `actual_hip_angle_rad = motor_position + position_diff` is retained as an observed/recorded transmission measurement.
-- Strategy `1.1.0` introduced raw-`motor_position` tracking. Strategy `2.2.0` retains that position reference: `position_diff` never changes a motor-position target. It is used only as an observed loading signal by the optional bounded angle-difference lift-assist FF policy and PID schedule.
+- Strategy `1.1.0` introduced raw-`motor_position` tracking. Strategy `2.5.0` retains that position reference: `position_diff` never changes a motor-position target. It is used only as an observed loading signal by the optional bounded angle-difference lift-assist FF policy and PID schedule.
 - An armed run performs a controlled move from fresh motor feedback to configured state A at `startup_move_speed_rad_s`, with zero FF and wheels rest.
 - Every unit test follows the explicit sequence, then rests all motors, reads feedback, and moves active hips to `recovery_position_deg` before completion.
 - Fresh motor state, torque, motor-error and raw-motor tracking limits abort the run. Reconstructed actual angle is recorded for analysis, not used by this controller revision.
@@ -31,7 +31,7 @@ breakaway policy is evaluated only during those normal moving phases.
 
 `feedforward_mode: static_breakaway` preserves the legacy error/velocity-gated
 breakaway policy. `feedforward_mode: angle_diff_lift_assist` is the Strategy
-2.2.0 loading policy. It ignores all `static_breakaway_*` values, normalizes
+2.5.0 loading policy. It ignores all `static_breakaway_*` values, normalizes
 each module's `position_diff` so positive means lift, and selects a physical
 inward request from the support, blend, or lifted region. Positive physical
 inward maps to positive motor torque for A/B and negative motor torque for
@@ -41,12 +41,14 @@ test holds/moves, never startup or recovery. Its two difference thresholds
 also form a lift latch, and optional apply/release rate limits bound torque
 changes through lift and recontact transitions.
 
-Strategy `2.2.0` can additionally schedule PID gains from that same
+Strategy `2.5.0` can additionally schedule PID gains from that same
 instantaneous normalized difference. When
 `lift_assist_pid_schedule_enabled: true`, each of Kp, Ki, and Kd is linearly
 interpolated between its support and lift values across the two thresholds.
-This is a direct gain schedule: it has no dwell, latch, rate limit, or time
-accumulation. It operates only during normal test holds/moves; startup,
+Independent support-to-lift/lift-to-support limits for Kp/Ki/Kd then bound the
+commanded-gain change toward those instantaneous values. Their selection follows
+the loading-zone transition rather than the numerical gain sign. A zero
+directional rate retains a direct change in that transition. This schedule has no dwell, latch, or time accumulation. It operates only during normal test holds/moves; startup,
 recovery, rest, completion, and abort retain the global gains. It leaves both
 the raw motor-position target and the lift-assist FF calculation unchanged.
 
@@ -82,6 +84,6 @@ brake and position hold are not implemented in 1.9.1.
 
 ## Version rule
 
-Every runnable YAML must set both a descriptive immutable `strategy_name` (for example `phase_a_two_state_baseline`) and numeric `strategy_version` (for example `2.2.0`). Change the version whenever sequence shape, guard logic, FF policy, wheel policy, gains, control reference, or analysis definition changes. `1.0.0` was the position-diff-compensated controller; `1.1.0` is the raw-motor controller with hubs forced rest; `1.2.0` adds speed-IK and fixed-torque wheel assist; `1.2.1` permits signed fixed wheel torque; `1.2.2` permits signed hip FF; `1.3.0` added the nonlinear breakaway policy; `1.3.1` removes its separate trajectory phase and adds the hard angle window; `1.4.0` added raw/filtered velocity-source selection; `1.5.0` removed fixed hip FF keys and restricted angle shaping to none or sine; `1.5.1` removes directional gains so asymmetry resides solely in the outward/inward schedules; `1.5.2` selects those schedules from error direction mapped by module convention; `1.6.0` replaces the velocity fade with a binary velocity gate; `1.7.0` replaces the cubic error ramp with a linear error ramp while retaining `static_breakaway_error_enable_rad`, `_full_rad`, and `_disable_rad`; `1.8.0` adds speed-IK hub-travel validity recording and exclusion thresholds; `1.9.0` adds per-module two-state references; `1.9.1` removes the undocumented 0.01-rad early FF return; `2.0.0` adds bounded angle-difference lift assist, normalized front/rear signs, 0–90° outward target trimming, and held-leg eligibility; `2.0.1` interprets a zero lift-policy maximum as the global FF limit, enabling progressive lift-start tuning; `2.1.0` latches lift across the blend region and adds independent applied-FF rise/release rate limits; `2.2.0` adds an optional direct, no-state PID schedule that linearly blends support/lift Kp, Ki, and Kd from the normalized angle difference. Do not overwrite an executed profile: copy it under a new dated run directory.
+Every runnable YAML must set both a descriptive immutable `strategy_name` (for example `phase_a_two_state_baseline`) and numeric `strategy_version` (for example `2.5.0`). Change the version whenever sequence shape, guard logic, FF policy, wheel policy, gains, control reference, or analysis definition changes. `1.0.0` was the position-diff-compensated controller; `1.1.0` is the raw-motor controller with hubs forced rest; `1.2.0` adds speed-IK and fixed-torque wheel assist; `1.2.1` permits signed fixed wheel torque; `1.2.2` permits signed hip FF; `1.3.0` added the nonlinear breakaway policy; `1.3.1` removes its separate trajectory phase and adds the hard angle window; `1.4.0` added raw/filtered velocity-source selection; `1.5.0` removed fixed hip FF keys and restricted angle shaping to none or sine; `1.5.1` removes directional gains so asymmetry resides solely in the outward/inward schedules; `1.5.2` selects those schedules from error direction mapped by module convention; `1.6.0` replaces the velocity fade with a binary velocity gate; `1.7.0` replaces the cubic error ramp with a linear error ramp while retaining `static_breakaway_error_enable_rad`, `_full_rad`, and `_disable_rad`; `1.8.0` adds speed-IK hub-travel validity recording and exclusion thresholds; `1.9.0` adds per-module two-state references; `1.9.1` removes the undocumented 0.01-rad early FF return; `2.0.0` adds bounded angle-difference lift assist, normalized front/rear signs, 0–90° outward target trimming, and held-leg eligibility; `2.0.1` interprets a zero lift-policy maximum as the global FF limit, enabling progressive lift-start tuning; `2.1.0` latches lift across the blend region and adds independent applied-FF rise/release rate limits; `2.2.0` adds an optional direct, no-state PID schedule that linearly blends support/lift Kp, Ki, and Kd from the normalized angle difference; `2.3.0` adds optional symmetric Kp/Ki/Kd slew limits; `2.4.0` introduced support-to-lift/lift-to-support semantics; `2.5.0` uses concise `kp/ki/kd_to_lift/support_rate_per_s` profile names for those independent limits, while accepting the 2.3.0 symmetric keys as a fallback for existing profiles. Do not overwrite an executed profile: copy it under a new dated run directory.
 
-The runner records the version and control reference in `trial_manifest.yaml`. Each row of `command_state_trace.csv` records phase, trial, commanded/observed motor position, position difference, reconstructed actual hip angle, torque, hub feedback, lift-assist state, scheduled PID gains, and the current speed-IK travel check. `hub_travel_summary.csv` provides the final per-module/per-stroke command travel, feedback travel, ratio, and validity. Any invalid speed-IK stroke invalidates that unit for wheel-condition analysis. The later force/contact estimator must record its estimator version in the same run manifest and produce contact from the force estimate plus an explicitly recorded threshold.
+The runner records the version and control reference in `trial_manifest.yaml`. Each row of `command_state_trace.csv` records phase, trial, commanded/observed motor position, position difference, reconstructed actual hip angle, torque, hub feedback, lift-assist state, scheduled PID targets and commanded gains, and the current speed-IK travel check. `hub_travel_summary.csv` provides the final per-module/per-stroke command travel, feedback travel, ratio, and validity. Any invalid speed-IK stroke invalidates that unit for wheel-condition analysis. The later force/contact estimator must record its estimator version in the same run manifest and produce contact from the force estimate plus an explicitly recorded threshold.
