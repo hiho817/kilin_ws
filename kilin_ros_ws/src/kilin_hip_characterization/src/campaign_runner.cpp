@@ -48,7 +48,7 @@ class CampaignRunner final : public rclcpp::Node {
     state_topic_ = declare_parameter<std::string>("state_topic", "/motor/state");
     run_dir_ = declare_parameter<std::string>("run_dir", "");
     strategy_name_ = declare_parameter<std::string>("strategy_name", "phase_a_two_state_baseline");
-    strategy_version_ = declare_parameter<std::string>("strategy_version", "1.9.0");
+    strategy_version_ = declare_parameter<std::string>("strategy_version", "2.0.0");
     active_modules_ = declare_parameter<std::vector<std::string>>("active_modules", {"A", "B"});
     repetitions_ = declare_parameter<int>("repetitions", 3);
     motion_mode_ = declare_parameter<std::string>("motion_mode", "two_state_cycle");
@@ -65,6 +65,15 @@ class CampaignRunner final : public rclcpp::Node {
     ki_ = declare_parameter<double>("ki", 0.0);
     kd_ = declare_parameter<double>("kd", 5.0);
     max_ff_ = declare_parameter<double>("max_abs_hip_ff_torque_nm", 200.0);
+    feedforward_mode_ = declare_parameter<std::string>("feedforward_mode", "static_breakaway");
+    lift_assist_support_region_end_ = declare_parameter<std::vector<double>>(
+        "lift_assist_support_region_end_rad", std::vector<double>{-kDegToRad, -kDegToRad, -kDegToRad, -kDegToRad});
+    lift_assist_lift_region_start_ = declare_parameter<std::vector<double>>(
+        "lift_assist_lift_region_start_rad", std::vector<double>{kDegToRad, kDegToRad, kDegToRad, kDegToRad});
+    lift_assist_support_inward_ff_ = declare_parameter<double>("lift_assist_support_inward_ff_nm", 0.0);
+    lift_assist_lift_start_inward_ff_ = declare_parameter<double>("lift_assist_lift_start_inward_ff_nm", 0.0);
+    lift_assist_lift_ramp_ = declare_parameter<double>("lift_assist_lift_ramp_nm_s", 0.0);
+    lift_assist_lift_max_inward_ff_ = declare_parameter<double>("lift_assist_lift_max_inward_ff_nm", 0.0);
     static_breakaway_policy_ = declare_parameter<std::string>("static_breakaway_policy", "disabled");
     static_breakaway_steps_outward_ = declare_parameter<std::vector<double>>("static_breakaway_steps_outward_nm", {0.0, 0.0, 0.0});
     static_breakaway_steps_inward_ = declare_parameter<std::vector<double>>("static_breakaway_steps_inward_nm", {0.0, 0.0, 0.0});
@@ -114,10 +123,12 @@ class CampaignRunner final : public rclcpp::Node {
         static_breakaway_angle_mode_ == "sine";
     const bool known_velocity_source = static_breakaway_velocity_source_ == "filtered" ||
         static_breakaway_velocity_source_ == "raw";
+    const bool lift_assist_mode = feedforward_mode_ == "angle_diff_lift_assist";
+    const bool known_feedforward_mode = feedforward_mode_ == "static_breakaway" || lift_assist_mode;
     const bool per_module_motion = motion_mode_ == "per_module_two_state_cycle";
     const bool known_motion_mode = motion_mode_ == "two_state_cycle" || per_module_motion;
     if (repetitions_ < 1 || startup_speed_ <= 0.0 || recovery_speed_ <= 0.0 || hip_speed_ <= 0.0 ||
-        !known_wheel_mode || !known_motion_mode ||
+        !known_wheel_mode || !known_motion_mode || !known_feedforward_mode ||
         max_wheel_torque_ < 0.0 || hip_to_wheel_m_ <= 0.0 || wheel_radius_m_ <= 0.0 ||
         wheel_rate_deadband_rad_s_ < 0.0 || !known_breakaway_policy || !known_angle_mode || !known_velocity_source ||
         hub_travel_ratio_min_ <= 0.0 || hub_travel_ratio_max_ < hub_travel_ratio_min_ ||
@@ -131,12 +142,28 @@ class CampaignRunner final : public rclcpp::Node {
         static_breakaway_velocity_filter_alpha_ <= 0.0 || static_breakaway_velocity_filter_alpha_ > 1.0 ||
         static_breakaway_angle_blend_outward_ < 0.0 || static_breakaway_angle_blend_outward_ > 1.0 ||
         static_breakaway_angle_blend_inward_ < 0.0 || static_breakaway_angle_blend_inward_ > 1.0 ||
-        static_breakaway_angle_min_deg_ < 0.0 || static_breakaway_angle_max_deg_ < static_breakaway_angle_min_deg_) {
+        static_breakaway_angle_min_deg_ < 0.0 || static_breakaway_angle_max_deg_ < static_breakaway_angle_min_deg_ ||
+        lift_assist_lift_start_inward_ff_ < 0.0 || lift_assist_lift_ramp_ < 0.0 ||
+        lift_assist_lift_max_inward_ff_ < lift_assist_lift_start_inward_ff_) {
       throw std::runtime_error("invalid trajectory, wheel-mode, or near-zero-breakaway setting");
     }
     if (per_module_motion &&
         (module_state_a_deg_.size() != kModuleNames.size() || module_state_b_deg_.size() != kModuleNames.size())) {
       throw std::runtime_error("per_module_two_state_cycle requires four module_state_a_deg and module_state_b_deg values in A,B,C,D order");
+    }
+    if (lift_assist_mode &&
+        (lift_assist_support_region_end_.size() != kModuleNames.size() ||
+         lift_assist_lift_region_start_.size() != kModuleNames.size())) {
+      throw std::runtime_error("angle_diff_lift_assist requires four lift-assist threshold values in A,B,C,D order");
+    }
+    if (lift_assist_mode) {
+      for (size_t i = 0; i < kModuleNames.size(); ++i) {
+        if (!std::isfinite(lift_assist_support_region_end_[i]) || !std::isfinite(lift_assist_lift_region_start_[i]) ||
+            lift_assist_support_region_end_[i] >= 0.0 || lift_assist_lift_region_start_[i] <= 0.0 ||
+            lift_assist_support_region_end_[i] >= lift_assist_lift_region_start_[i]) {
+          throw std::runtime_error("lift-assist support-region end must be negative and lift-region start positive for every module");
+        }
+      }
     }
     for (const auto &name : active_modules_) {
       if (std::find(kModuleNames.begin(), kModuleNames.end(), name) == kModuleNames.end()) throw std::runtime_error("unknown active module");
@@ -144,7 +171,7 @@ class CampaignRunner final : public rclcpp::Node {
     publisher_ = create_publisher<kilin_msgs::msg::MotorCmdStamped>(command_topic_, 10);
     subscriber_ = create_subscription<kilin_msgs::msg::MotorStateStamped>(state_topic_, rclcpp::QoS(20).best_effort(), std::bind(&CampaignRunner::onState, this, std::placeholders::_1));
     timer_ = create_wall_timer(std::chrono::milliseconds(10), std::bind(&CampaignRunner::tick, this));
-    RCLCPP_INFO(get_logger(), "Runner ready: strategy=%s v%s motion_mode=%s armed=%s command_topic=%s wheel_mode=%s", strategy_name_.c_str(), strategy_version_.c_str(), motion_mode_.c_str(), armed_ ? "true" : "false", command_topic_.c_str(), wheel_mode_.c_str());
+    RCLCPP_INFO(get_logger(), "Runner ready: strategy=%s v%s motion_mode=%s feedforward_mode=%s armed=%s command_topic=%s wheel_mode=%s", strategy_name_.c_str(), strategy_version_.c_str(), motion_mode_.c_str(), feedforward_mode_.c_str(), armed_ ? "true" : "false", command_topic_.c_str(), wheel_mode_.c_str());
   }
 
  private:
@@ -165,10 +192,21 @@ class CampaignRunner final : public rclcpp::Node {
     bool error_enabled{false};
     bool released{false};
   };
+  struct LiftAssistState { double dwell_s{0.0}; double last_update_s{0.0}; };
 
   bool active(size_t i) const { return std::find(active_modules_.begin(), active_modules_.end(), kModuleNames[i]) != active_modules_.end(); }
   double actual(size_t i) const { return hips_[i].motor + hips_[i].diff; }
   double sign(size_t i) const { return i < 2 ? -1.0 : 1.0; }
+  double outwardMagnitude(size_t i, double motor_position_rad) const { return sign(i) * motor_position_rad; }
+  bool inLiftAssistOutwardRange(size_t i, double motor_position_rad) const {
+    return std::isfinite(motor_position_rad) && outwardMagnitude(i, motor_position_rad) >= 0.0 &&
+           outwardMagnitude(i, motor_position_rad) <= M_PI / 2.0;
+  }
+  double trimLiftAssistTarget(size_t i, double target_rad) const {
+    if (feedforward_mode_ != "angle_diff_lift_assist") return target_rad;
+    return sign(i) * std::clamp(outwardMagnitude(i, target_rad), 0.0, M_PI / 2.0);
+  }
+  double normalizedLiftDifference(size_t i) const { return -sign(i) * hips_[i].diff; }
   double stateA(size_t i) const {
     const double magnitude_deg = motion_mode_ == "per_module_two_state_cycle" ? module_state_a_deg_[i] : state_a_deg_;
     return active(i) ? sign(i) * magnitude_deg * kDegToRad : 0.0;
@@ -265,6 +303,13 @@ class CampaignRunner final : public rclcpp::Node {
 
   bool wheelMotionPhase() const {
     return phase_ == Phase::kMoveToB || phase_ == Phase::kMoveToA;
+  }
+  bool normalTestPhase() const {
+    return phase_ == Phase::kStartHold || phase_ == Phase::kMoveToB ||
+           phase_ == Phase::kHoldAtB || phase_ == Phase::kMoveToA;
+  }
+  bool feedforwardAllowedInPhase() const {
+    return feedforward_mode_ == "angle_diff_lift_assist" ? normalTestPhase() : wheelMotionPhase();
   }
 
   double wheelRateRadS(double hip_rate_rad_s, double commanded_hip_rad) const {
@@ -366,27 +411,29 @@ class CampaignRunner final : public rclcpp::Node {
     const auto command_time = now();
     const double dt_s = std::max(1e-3, (command_time - previous_target_time_).seconds());
     for (size_t i = 0; i < 4; ++i) {
-      const double hip_rate = (target[i] - previous_target_[i]) / dt_s;
-      commanded_[i] = target[i];
+      const double safe_target = trimLiftAssistTarget(i, target[i]);
+      const double hip_rate = (safe_target - previous_target_[i]) / dt_s;
+      commanded_[i] = safe_target;
       legs[i].hip.motor_mode = kPosition;
       // Do not compensate the motor command with position_diff.  It is kept in
       // the state/logging path as the reconstructed actual hip angle, but it is
       // not part of this low-level position-control loop.
-      legs[i].hip.position = target[i];
+      legs[i].hip.position = safe_target;
       legs[i].hip.kp = kp_; legs[i].hip.ki = ki_; legs[i].hip.kd = kd_;
       raw_hip_velocity_trace_[i] = hips_[i].velocity;
       breakaway_velocity_used_trace_[i] = breakawayVelocity(i);
-      commanded_hip_ff_[i] = allow_ff ? feedforward(i, target[i] - hips_[i].motor) : 0.0;
+      commanded_hip_ff_[i] = allow_ff ? feedforward(i, safe_target - hips_[i].motor) : 0.0;
       if (!allow_ff) {
         commanded_static_breakaway_ff_[i] = 0.0;
         breakaway_dwell_trace_[i] = 0.0;
         breakaway_released_trace_[i] = 0;
+        resetLiftAssist(i);
       }
       legs[i].hip.torque = commanded_hip_ff_[i];
       legs[i].steering.motor_mode = kPosition;
       legs[i].steering.position = 0.0;
-      commandHub(legs[i], i, hip_rate, target[i], dt_s);
-      previous_target_[i] = target[i];
+      commandHub(legs[i], i, hip_rate, safe_target, dt_s);
+      previous_target_[i] = safe_target;
     }
     previous_target_time_ = command_time;
     message.module_a = legs[0]; message.module_b = legs[1]; message.module_c = legs[2]; message.module_d = legs[3];
@@ -479,11 +526,66 @@ class CampaignRunner final : public rclcpp::Node {
     return command;
   }
 
+  void clearLiftAssistTrace(size_t i) {
+    lift_assist_normalized_diff_trace_[i] = NAN;
+    lift_assist_physical_inward_ff_trace_[i] = 0.0;
+    lift_assist_dwell_trace_[i] = 0.0;
+    lift_assist_active_trace_[i] = 0;
+  }
+
+  void resetLiftAssist(size_t i) {
+    lift_assist_[i] = LiftAssistState{};
+    clearLiftAssistTrace(i);
+  }
+
+  double angleDiffLiftAssistFF(size_t i) {
+    clearLiftAssistTrace(i);
+    if (!active(i) || !inLiftAssistOutwardRange(i, commanded_[i]) ||
+        !inLiftAssistOutwardRange(i, hips_[i].motor) || !std::isfinite(hips_[i].diff)) {
+      lift_assist_[i] = LiftAssistState{};
+      return 0.0;
+    }
+
+    const double normalized_diff = normalizedLiftDifference(i);
+    lift_assist_normalized_diff_trace_[i] = normalized_diff;
+    lift_assist_active_trace_[i] = 1;
+    const double support_end = lift_assist_support_region_end_[i];
+    const double lift_start = lift_assist_lift_region_start_[i];
+    auto &state = lift_assist_[i];
+    double lift_physical_inward = lift_assist_lift_start_inward_ff_;
+    if (normalized_diff >= lift_start) {
+      const double time_s = now().seconds();
+      const double dt_s = state.last_update_s == 0.0 ? 0.0 : std::clamp(time_s - state.last_update_s, 0.0, 0.05);
+      state.last_update_s = time_s;
+      state.dwell_s += dt_s;
+      lift_physical_inward = std::min(lift_assist_lift_start_inward_ff_ +
+                                          lift_assist_lift_ramp_ * state.dwell_s,
+                                      lift_assist_lift_max_inward_ff_);
+    } else {
+      state = LiftAssistState{};
+    }
+
+    double physical_inward_ff = lift_assist_support_inward_ff_;
+    if (normalized_diff >= lift_start) {
+      physical_inward_ff = lift_physical_inward;
+    } else if (normalized_diff > support_end) {
+      const double blend = (normalized_diff - support_end) / (lift_start - support_end);
+      physical_inward_ff = (1.0 - blend) * lift_assist_support_inward_ff_ + blend * lift_physical_inward;
+    }
+
+    lift_assist_physical_inward_ff_trace_[i] = physical_inward_ff;
+    lift_assist_dwell_trace_[i] = state.dwell_s;
+    // Physical inward is positive in profile space. A/B motors are positive
+    // inward; C/D motors are negative inward under the established convention.
+    return std::clamp(-sign(i) * physical_inward_ff, -max_ff_, max_ff_);
+  }
+
   double feedforward(size_t i, double error) {
     commanded_static_breakaway_ff_[i] = 0.0;
     breakaway_dwell_trace_[i] = 0.0;
     breakaway_released_trace_[i] = 0;
-    if (!active(i) || std::abs(error) < 0.01) return 0.0;
+    if (!active(i)) return 0.0;
+    if (feedforward_mode_ == "angle_diff_lift_assist") return angleDiffLiftAssistFF(i);
     // The raw error sign sets corrective torque polarity. The module convention
     // maps that same error into the physical outward/inward label: identical
     // error signs mean opposite labels for front and rear modules.
@@ -517,19 +619,19 @@ class CampaignRunner final : public rclcpp::Node {
         if (elapsed() >= moveDuration(false)) setPhase(Phase::kStartHold, "state A reached; beginning test hold");
         break;
       case Phase::kStartHold:
-        commandPosition(a, false);
+        commandPosition(a, feedforwardAllowedInPhase());
         if (elapsed() >= start_hold_s_) setPhase(Phase::kMoveToB, "beginning dynamic move to state B");
         break;
       case Phase::kMoveToB:
-        commandPosition(interpolated(a, b, clamp01(elapsed() / fullStrokeDuration())), true);
+        commandPosition(interpolated(a, b, clamp01(elapsed() / fullStrokeDuration())), feedforwardAllowedInPhase());
         if (elapsed() >= fullStrokeDuration()) setPhase(Phase::kHoldAtB, "state B reached");
         break;
       case Phase::kHoldAtB:
-        commandPosition(b, false);
+        commandPosition(b, feedforwardAllowedInPhase());
         if (elapsed() >= segment_hold_s_) setPhase(Phase::kMoveToA, "returning to state A");
         break;
       case Phase::kMoveToA:
-        commandPosition(interpolated(b, a, clamp01(elapsed() / fullStrokeDuration())), true);
+        commandPosition(interpolated(b, a, clamp01(elapsed() / fullStrokeDuration())), feedforwardAllowedInPhase());
         if (elapsed() >= fullStrokeDuration()) {
           if (++completed_repetitions_ >= repetitions_) setPhase(Phase::kRecoveryRest, "unit test complete; resting all motors");
           else setPhase(Phase::kStartHold, "next repetition");
@@ -574,7 +676,7 @@ class CampaignRunner final : public rclcpp::Node {
     if (run_dir_.empty()) return;
     fs::create_directories(run_dir_);
     trace_.open(fs::path(run_dir_) / "command_state_trace.csv");
-    trace_ << "time_s,phase,trial,module,commanded_motor_rad,motor_position_rad,position_diff_rad,actual_hip_angle_rad,hip_torque,commanded_hip_ff,raw_hip_velocity_rad_s,filtered_hip_velocity_rad_s,breakaway_velocity_used_rad_s,static_breakaway_ff,static_breakaway_dwell_s,static_breakaway_released,hub_mode,commanded_hub_velocity_rpm10,commanded_hub_torque,hub_position_rad,hub_velocity_feedback,hub_torque_feedback,hub_feedback_mode,hub_error_code,hub_travel_command_rad,hub_travel_feedback_rad,hub_travel_ratio,hub_travel_valid,error_code\n";
+    trace_ << "time_s,phase,trial,module,commanded_motor_rad,motor_position_rad,position_diff_rad,actual_hip_angle_rad,hip_torque,commanded_hip_ff,raw_hip_velocity_rad_s,filtered_hip_velocity_rad_s,breakaway_velocity_used_rad_s,static_breakaway_ff,static_breakaway_dwell_s,static_breakaway_released,lift_assist_normalized_diff_rad,lift_assist_physical_inward_ff,lift_assist_dwell_s,lift_assist_active,hub_mode,commanded_hub_velocity_rpm10,commanded_hub_torque,hub_position_rad,hub_velocity_feedback,hub_torque_feedback,hub_feedback_mode,hub_error_code,hub_travel_command_rad,hub_travel_feedback_rad,hub_travel_ratio,hub_travel_valid,error_code\n";
     hub_travel_summary_.open(fs::path(run_dir_) / "hub_travel_summary.csv");
     hub_travel_summary_ << "phase,trial,module,start_hub_position_rad,end_hub_position_rad,commanded_travel_rad,feedback_travel_rad,travel_ratio,valid,final_hub_torque,final_hub_velocity,hub_error_code\n";
     std::ofstream manifest(fs::path(run_dir_) / "trial_manifest.yaml");
@@ -589,6 +691,13 @@ class CampaignRunner final : public rclcpp::Node {
              << "\nwheel_torque_outward_nm: " << wheel_torque_outward_
              << "\nwheel_torque_inward_nm: " << wheel_torque_inward_
              << "\nmax_abs_hub_torque_nm: " << max_wheel_torque_
+             << "\nfeedforward_mode: " << feedforward_mode_
+             << "\nlift_assist_support_region_end_rad: [" << lift_assist_support_region_end_[0] << ", " << lift_assist_support_region_end_[1] << ", " << lift_assist_support_region_end_[2] << ", " << lift_assist_support_region_end_[3] << "]"
+             << "\nlift_assist_lift_region_start_rad: [" << lift_assist_lift_region_start_[0] << ", " << lift_assist_lift_region_start_[1] << ", " << lift_assist_lift_region_start_[2] << ", " << lift_assist_lift_region_start_[3] << "]"
+             << "\nlift_assist_support_inward_ff_nm: " << lift_assist_support_inward_ff_
+             << "\nlift_assist_lift_start_inward_ff_nm: " << lift_assist_lift_start_inward_ff_
+             << "\nlift_assist_lift_ramp_nm_s: " << lift_assist_lift_ramp_
+             << "\nlift_assist_lift_max_inward_ff_nm: " << lift_assist_lift_max_inward_ff_
              << "\nstatic_breakaway_policy: " << static_breakaway_policy_
              << "\nstatic_breakaway_steps_outward_nm: [" << static_breakaway_steps_outward_[0] << ", " << static_breakaway_steps_outward_[1] << ", " << static_breakaway_steps_outward_[2] << "]"
              << "\nstatic_breakaway_steps_inward_nm: [" << static_breakaway_steps_inward_[0] << ", " << static_breakaway_steps_inward_[1] << ", " << static_breakaway_steps_inward_[2] << "]"
@@ -622,6 +731,8 @@ class CampaignRunner final : public rclcpp::Node {
              << raw_hip_velocity_trace_[i] << ',' << filtered_hip_velocity_[i] << ','
              << breakaway_velocity_used_trace_[i] << ',' << commanded_static_breakaway_ff_[i] << ','
              << breakaway_dwell_trace_[i] << ',' << breakaway_released_trace_[i] << ','
+             << lift_assist_normalized_diff_trace_[i] << ',' << lift_assist_physical_inward_ff_trace_[i] << ','
+             << lift_assist_dwell_trace_[i] << ',' << lift_assist_active_trace_[i] << ','
              << commanded_hub_mode_[i] << ',' << commanded_hub_velocity_rpm10_[i] << ','
              << commanded_hub_torque_[i] << ',' << hubs_[i].position << ',' << hubs_[i].velocity << ','
              << hubs_[i].torque << ',' << hubs_[i].mode << ',' << hubs_[i].error << ','
@@ -634,14 +745,16 @@ class CampaignRunner final : public rclcpp::Node {
   std::string command_topic_, state_topic_, run_dir_, strategy_name_, strategy_version_, motion_mode_; std::vector<std::string> active_modules_;
   double state_a_deg_{0}, state_b_deg_{45}, startup_speed_{.1}, recovery_deg_{0}, recovery_speed_{.1}, recovery_rest_s_{1}, hip_speed_{.2}, kp_{360}, ki_{0}, kd_{5}, max_ff_{200}, start_hold_s_{2}, segment_hold_s_{1}, max_state_age_s_{.1}, max_error_rad_{.35}, max_torque_{400}, wheel_torque_outward_{0}, wheel_torque_inward_{0}, max_wheel_torque_{20}, hip_to_wheel_m_{.260}, wheel_radius_m_{.051}, wheel_rate_deadband_rad_s_{.02}, hub_travel_ratio_min_{.75}, hub_travel_ratio_max_{1.25}, hub_travel_min_command_rad_{.25};
   double static_breakaway_step_1_s_{.10}, static_breakaway_step_2_s_{.30}, static_breakaway_exp_start_outward_{0}, static_breakaway_exp_peak_outward_{0}, static_breakaway_exp_start_inward_{0}, static_breakaway_exp_peak_inward_{0}, static_breakaway_exp_tau_s_{.20}, static_breakaway_error_enable_rad_{.02}, static_breakaway_error_full_rad_{.05}, static_breakaway_error_disable_rad_{.01}, static_breakaway_dwell_speed_rad_s_{.03}, static_breakaway_release_speed_rad_s_{.10}, static_breakaway_velocity_filter_alpha_{.20}, static_breakaway_angle_blend_outward_{0}, static_breakaway_angle_blend_inward_{0}, static_breakaway_angle_min_deg_{15}, static_breakaway_angle_max_deg_{90};
-  std::string wheel_mode_, static_breakaway_policy_, static_breakaway_angle_mode_, static_breakaway_velocity_source_;
-  std::vector<double> module_state_a_deg_, module_state_b_deg_, static_breakaway_steps_outward_, static_breakaway_steps_inward_;
+  std::string wheel_mode_, feedforward_mode_, static_breakaway_policy_, static_breakaway_angle_mode_, static_breakaway_velocity_source_;
+  std::vector<double> module_state_a_deg_, module_state_b_deg_, lift_assist_support_region_end_, lift_assist_lift_region_start_, static_breakaway_steps_outward_, static_breakaway_steps_inward_;
   std::array<HipState, 4> hips_{};
   std::array<HubState, 4> hubs_{};
   std::array<BreakawayState, 4> breakaway_{};
+  std::array<LiftAssistState, 4> lift_assist_{};
   std::array<HubTravelState, 4> hub_travel_{};
-  std::array<double, 4> commanded_{}, move_start_{}, previous_target_{}, commanded_hub_velocity_rpm10_{}, commanded_hub_torque_{}, commanded_hip_ff_{}, commanded_static_breakaway_ff_{}, raw_hip_velocity_trace_{}, filtered_hip_velocity_{}, breakaway_velocity_used_trace_{}, breakaway_dwell_trace_{};
-  std::array<int, 4> commanded_hub_mode_{}, breakaway_released_trace_{};
+  std::array<double, 4> commanded_{}, move_start_{}, previous_target_{}, commanded_hub_velocity_rpm10_{}, commanded_hub_torque_{}, commanded_hip_ff_{}, commanded_static_breakaway_ff_{}, raw_hip_velocity_trace_{}, filtered_hip_velocity_{}, breakaway_velocity_used_trace_{}, breakaway_dwell_trace_{}, lift_assist_normalized_diff_trace_{}, lift_assist_physical_inward_ff_trace_{}, lift_assist_dwell_trace_{};
+  std::array<int, 4> commanded_hub_mode_{}, breakaway_released_trace_{}, lift_assist_active_trace_{};
+  double lift_assist_support_inward_ff_{0.0}, lift_assist_lift_start_inward_ff_{0.0}, lift_assist_lift_ramp_{0.0}, lift_assist_lift_max_inward_ff_{0.0};
   bool hub_travel_validation_enabled_{true};
   int invalid_hub_travel_segments_{0};
   Phase phase_{Phase::kWaitForState};

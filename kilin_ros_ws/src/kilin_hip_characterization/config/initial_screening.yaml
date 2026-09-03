@@ -7,7 +7,7 @@ kilin_hip_characterization:
     state_topic: /motor/state
     run_dir: ""
     strategy_name: phase_a_two_state_baseline
-    strategy_version: 1.9.0
+    strategy_version: 2.0.0
     repetitions: 3
     active_modules: [A, B]
     motion_mode: two_state_cycle
@@ -23,6 +23,20 @@ kilin_hip_characterization:
     ki: 0.0
     kd: 5.0
     max_abs_hip_ff_torque_nm: 200.0
+    # Select exactly one FF policy. The default static-breakaway policy remains
+    # disabled below. angle_diff_lift_assist is zero-torque by default.
+    feedforward_mode: static_breakaway
+    # For angle_diff_lift_assist only. Values are [A,B,C,D] after the
+    # controller normalizes each module's position_diff so positive means lift.
+    # +/- 0.0174533 rad is +/- 1 degree.
+    lift_assist_support_region_end_rad: [-0.0174533, -0.0174533, -0.0174533, -0.0174533]
+    lift_assist_lift_region_start_rad: [0.0174533, 0.0174533, 0.0174533, 0.0174533]
+    # Positive means physical inward. The runner maps it to motor commands:
+    # A/B positive and C/D negative. Zero values leave this mode inert.
+    lift_assist_support_inward_ff_nm: 0.0
+    lift_assist_lift_start_inward_ff_nm: 0.0
+    lift_assist_lift_ramp_nm_s: 0.0
+    lift_assist_lift_max_inward_ff_nm: 0.0
     # Disabled by default.  When enabled, this assist is evaluated during the
     # normal A-to-B and B-to-A moves only; it does not create a separate phase.
     static_breakaway_policy: disabled

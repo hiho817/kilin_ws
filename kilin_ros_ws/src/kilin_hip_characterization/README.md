@@ -8,7 +8,7 @@ One ROS 2 package for low-level hip-transmission characterization, PID and bound
 - Real actuation requires both `armed:=true` and an explicit real command topic.
 - It sends nothing until `/motor/state` is fresh, then captures current hip and hub feedback as its starting state.
 - New-recording convention is `actual_hip_angle_rad = motor_position + position_diff`.
-- Strategy **1.9.0** commands the raw motor-position reference directly. `position_diff` is not fed back into the position or FF loop.
+- Strategy **2.0.0** commands the raw motor-position reference directly. `position_diff` is never fed back into the position target; the optional lift-assist FF mode uses it only as a bounded, observed loading signal.
 - `actual_hip_angle_rad` is still reconstructed and recorded for offline transmission/force analysis. Safety aborts on stale state, non-finite state, motor error code, configured hip-torque bound, or configured raw-motor tracking bound. Abort sends all motors to rest.
 
 The package does not modify `kilin_com_estimator`, the terrain planner, or FAST-LIO2.
@@ -22,10 +22,10 @@ state-A hold → constant-speed move to state B → segment hold
 → constant-speed return to state A → recovery
 ```
 
-There is no separate static-release phase. Worm-gear breakaway assistance, if
-enabled, is evaluated only as a bounded part of the ordinary A→B or B→A move.
-The trace records the complete policy-generated FF command and its internal
-breakaway contribution.
+There is no separate static-release phase. The legacy breakaway policy is
+evaluated only during A→B/B→A moves. The new angle-difference lift-assist
+policy is evaluated during normal test holds as well as those moves. Both are
+zero during startup, recovery, rest, completion, and abort.
 
 The initial profile is `config/initial_screening.yaml`. For experiments, keep
 one direct `profile.yaml` or one master `master.yaml` in the dated log
@@ -38,7 +38,7 @@ control policy requires a new name/version before an experiment is run.
 
 ### Wheel modes
 
-Strategy **1.9.0** has one explicit `wheel_mode`, recorded in the run manifest
+Strategy **2.0.0** has one explicit `wheel_mode`, recorded in the run manifest
 and trace. Hubs are always `rest` during startup, both hold phases, recovery,
 completion, and abort. Wheel commands are active only during the normal A→B
 and B→A moves.
@@ -48,7 +48,7 @@ and B→A moves.
 | `rest` | Hub motor mode `rest`; no active velocity or torque command. | Baseline hip-only test. |
 | `speed_ik` (or alias `speed`) | Hub velocity is calculated live from the commanded hip trajectory at every control tick. | The wheel follows hip motion kinematically; it is never a fixed speed. The command field uses the established RPM-times-ten unit: `hub.velocity = wheel_rate_rad_s × 60 × 10 / (2π)`. |
 | `torque_assist` (or alias `torque`) | Hub torque magnitude is a fixed signed configuration value. The IK wheel rate chooses the reference direction. | Positive values assist `speed_ik`; negative values oppose it. The torque magnitude is **not** calculated from IK. Outward and inward values may differ and are clamped. |
-| `brake` / `position_hold` | Not implemented in 1.9.0. | A profile using either is rejected before commanding hardware. Position hold will require feedback-captured position before it is introduced. |
+| `brake` / `position_hold` | Not implemented in 2.0.0. | A profile using either is rejected before commanding hardware. Position hold will require feedback-captured position before it is introduced. |
 
 For `speed_ik`, IK supplies both the live wheel-rate magnitude and direction.
 For `torque_assist`, IK supplies **only the reference direction**; the signed
@@ -82,7 +82,7 @@ torque, so the bag and compact trace can be cross-checked after every run.
 
 The hardware feedback currently reports hub velocity as zero even while the hub
 is commanded in velocity mode, so velocity feedback is not used to judge a
-wheel condition. Strategy 1.9.0 instead compares the feedback hub-position
+wheel condition. Strategy 2.0.0 instead compares the feedback hub-position
 change with the integrated, sent speed command for every module and every
 A→B/B→A stroke:
 
@@ -121,7 +121,7 @@ The master runner merges `kilin_hip_batch.defaults` with each test's
 | `run_dir` | string / empty | Evidence folder. Required for an armed direct controller invocation; the helpers set it automatically. |
 | `bag_topics` | string list / six base topics | Topics passed to `ros2 bag record` by `single_runner.py` or `batch_runner.py`. Place it in a direct profile's `ros__parameters`, or master `defaults`; a unit-test override may replace it. The helper removes it before passing the resolved profile to the C++ controller and saves the final list as `bag_topics.txt`. |
 | `strategy_name` | string | Human-readable control/analysis strategy name, recorded in the manifest. |
-| `strategy_version` | numeric string | Revision of that strategy, e.g. `1.9.0`, recorded in the manifest. Use `1.9.0` for this raw-motor, wheel-mode-capable controller; do not reuse `1.0.0` compensated-run profiles. |
+| `strategy_version` | numeric string | Revision of that strategy, e.g. `2.0.0`, recorded in the manifest. Use `2.0.0` for this raw-motor, wheel-mode-capable controller; do not reuse `1.0.0` compensated-run profiles. |
 
 ### Test selection and geometry
 
@@ -146,7 +146,7 @@ the normal controller, rather than being disabled or sent to zero:
 
 ```yaml
 strategy_name: a_40_50_with_bcd_45_hold
-strategy_version: 1.9.0
+strategy_version: 2.0.0
 active_modules: [A, B, C, D]
 motion_mode: per_module_two_state_cycle
 module_state_a_deg: [40.0, 45.0, 45.0, 45.0]
@@ -175,13 +175,102 @@ control, not a disabled leg.
 | `segment_hold_s` | seconds / `1.0` | Position hold at state B before returning to A. |
 | `kp`, `ki`, `kd` | direct motor gains / `360,0,5` | Hip position-loop gains copied directly into every hip `MotorCmd`. Change only one candidate dimension at a time during PID screening. |
 
-### Near-zero breakaway policy (strategy 1.9.0)
+### Feedforward-mode selection
+
+`feedforward_mode` chooses one complete FF policy. Do not combine the two
+policies in one run: `angle_diff_lift_assist` ignores every
+`static_breakaway_*` setting.
+
+| Parameter | Type / default | Exact effect |
+| --- | --- | --- |
+| `feedforward_mode` | `static_breakaway` | Legacy error/velocity-gated breakaway policy. Its default `static_breakaway_policy: disabled` gives zero FF. Set `angle_diff_lift_assist` to select the new position-difference policy. |
+| `lift_assist_support_region_end_rad` | four rad / `[-0.01745,…]` | Per-module `[A,B,C,D]` normalized-difference upper boundary of the body-support region. Must be negative. Example: `-0.01745` rad is about −1°. |
+| `lift_assist_lift_region_start_rad` | four rad / `[0.01745,…]` | Per-module normalized-difference lower boundary of the lifted-leg region. Must be positive and greater than the support-region end. Example: `+0.01745` rad is about +1°. |
+| `lift_assist_support_inward_ff_nm` | signed direct command / `0` | Constant physical inward FF in the support region. Positive requests inward assistance; zero disables it; negative deliberately requests outward torque. |
+| `lift_assist_lift_start_inward_ff_nm` | nonnegative direct command / `0` | Initial physical inward FF on entry to the lifted-leg region. |
+| `lift_assist_lift_ramp_nm_s` | nonnegative direct command per second / `0` | Rate at which lifted-leg inward FF increases while the lift condition remains true. |
+| `lift_assist_lift_max_inward_ff_nm` | nonnegative direct command / `0` | Cap for the lifted-leg ramp. It must be at least `lift_assist_lift_start_inward_ff_nm`; the global `max_abs_hip_ff_torque_nm` clamp still applies. |
+
+#### Angle-difference lift-assist policy (strategy 2.0.0)
+
+For each module, the raw recorded difference is
+
+$$d_i=\texttt{position\_diff}_i.$$
+
+Raw signs differ between front and rear hips.  The controller therefore uses a
+normalized loading coordinate
+
+$$z_i=-s_i d_i,\qquad s_{A,B}=-1,\quad s_{C,D}=+1.$$
+
+Thus positive $z_i$ always means the observed angle difference is opposite the
+outward motor position and therefore indicates unloading/lift, for every
+module.  The profile thresholds are applied to $z_i$, not directly to raw
+`position_diff`:
+
+$$z_{\mathrm{support},i}<0<z_{\mathrm{lift},i}.$$
+
+Let $F_s$ be `lift_assist_support_inward_ff_nm`. Let the lifted-leg FF grow
+only while $z_i\ge z_{\mathrm{lift},i}$:
+
+$$F_l(t)=\min(F_{l,0}+r_l t,F_{l,\max}).$$
+
+The physical inward request is
+
+$$
+F_i=
+\begin{cases}
+F_s, & z_i\le z_{\mathrm{support},i},\\
+(1-\lambda)F_s+\lambda F_l(t), & z_{\mathrm{support},i}<z_i<z_{\mathrm{lift},i},\\
+F_l(t), & z_i\ge z_{\mathrm{lift},i},
+\end{cases}
+\qquad
+\lambda=\frac{z_i-z_{\mathrm{support},i}}
+{z_{\mathrm{lift},i}-z_{\mathrm{support},i}}.
+$$
+
+The lift timer resets whenever $z_i<z_{\mathrm{lift},i}$. There are no
+unused outer extrema or hidden error, velocity, dwell, or release gates in
+this mode.  The trace records `lift_assist_normalized_diff_rad`, physical
+request `lift_assist_physical_inward_ff`, lift dwell, activity, and the final
+motor command `commanded_hip_ff`.
+
+Profile values use a physical convention: positive means inward. The runner
+maps that request to motor torque as
+
+$$\tau_{A,B}=+F_i,\qquad \tau_{C,D}=-F_i.$$
+
+It never uses tracking-error sign for this mapping.  This is why a single
+positive inward request has the intended direction for A/B and C/D.
+
+For this mode only, every hip target is trimmed in the motor's outward frame
+to the inclusive 0–90° range. FF is zero whenever the commanded **or measured**
+motor position is outside that range. The motor PID still uses raw motor
+position; `position_diff` changes only the bounded FF request. Lift assist is
+permitted in state-A hold, A→B move, state-B hold, and B→A return, so holding
+B/C/D hips remain controlled. It is forced to zero in startup, recovery,
+rest, completion, and abort.
+
+Minimal inert example; change one zero-valued torque parameter at a time:
+
+```yaml
+strategy_name: angle_diff_lift_assist_screen
+strategy_version: 2.0.0
+feedforward_mode: angle_diff_lift_assist
+lift_assist_support_region_end_rad: [-0.0174533, -0.0174533, -0.0174533, -0.0174533]
+lift_assist_lift_region_start_rad: [0.0174533, 0.0174533, 0.0174533, 0.0174533]
+lift_assist_support_inward_ff_nm: 0.0
+lift_assist_lift_start_inward_ff_nm: 0.0
+lift_assist_lift_ramp_nm_s: 0.0
+lift_assist_lift_max_inward_ff_nm: 0.0
+```
+
+### Near-zero breakaway policy (strategy 1.9.1)
 
 This is the nonlinear worm-gear breakaway policy. It is disabled by default:
 
     static_breakaway_policy: disabled
 
-Strategy **1.9.0** has no directional gain parameters. Asymmetry comes only
+Strategy **1.9.1** has no directional gain parameters. Asymmetry comes only
 from the separately configured outward and inward schedules $S_d(t_d)$. With
 policy `disabled`, hip FF is zero. With policy enabled, this is the complete
 hip FF during normal A→B and B→A motion.
@@ -315,7 +404,9 @@ G_e(|e|)=\operatorname{clip}_{[0,1]}
 $$
 
 Thus `static_breakaway_error_enable_rad`, `_full_rad`, and `_disable_rad` all
-remain profile parameters. There is no $3u^2-2u^3$ shaping in strategy 1.9.0.
+remain profile parameters. There is no $3u^2-2u^3$ shaping in strategy 1.9.1.
+There is also no hidden `|error| < 0.01 rad` early return: only the documented
+error-enable/full/disable gate controls whether this policy can produce FF.
 The velocity gate is a step:
 
 $$
@@ -328,7 +419,7 @@ $$
 
 Here $v_{\mathrm{gate}}$ is `static_breakaway_dwell_speed_rad_s`. A zero gate
 threshold disables this step gate. There is no exponential velocity fade or
-velocity-fade power in strategy 1.9.0. $G_q$ is the optional angle factor
+velocity-fade power in strategy 1.9.1. $G_q$ is the optional angle factor
 described below.
 
 The equation is evaluated only when the commanded raw-motor reference lies in
@@ -336,8 +427,7 @@ the inclusive `static_breakaway_angle_min_deg` to `_max_deg` window. Otherwise
 $\tau_{\mathrm{ff}}=0$ and dwell does not accumulate. Dwell resets if selected
 speed exceeds `static_breakaway_dwell_speed_rad_s` or error direction reverses.
 The policy latches off for the remaining move once selected speed reaches
-`static_breakaway_release_speed_rad_s`. Finally, `abs(e) < 0.01 rad` forces
-$\tau_{\mathrm{ff}}=0$.
+`static_breakaway_release_speed_rad_s`.
 
 #### Gates, dwell, and release latch
 
@@ -468,7 +558,7 @@ records commanded hip FF, raw/filtered/selected motor velocity, breakaway FF,
 dwell time, and release-latch state; the manifest records policy, schedules,
 velocity source, steps, angle mode, and error thresholds.
 
-### Hip FF direction and limit
+### Static-breakaway FF direction and limit
 
 The near-zero policy is the entire hip FF command. It is issued only in A→B
 and B→A motion and is zero in startup, holds, recovery, completion, and abort.
@@ -478,8 +568,7 @@ For each hip, the runner uses the raw-motor tracking direction:
 e = commanded_motor_position − measured_motor_position
 ```
 
-If `abs(e) < 0.01 rad`, FF is zero. Otherwise `sign(e)` is the corrective
-torque direction. That same error, mapped through the module reference sign
+`sign(e)` is the corrective torque direction. That same error, mapped through the module reference sign
 `s` (`−1` for A/B, `+1` for C/D), selects the physical schedule: outward means
 `e × s > 0`, otherwise inward. The runner selects the corresponding schedule,
 then applies the equation above. Thus positive raw error is inward for a front
@@ -495,7 +584,7 @@ negative value opposes it. This calculation never uses `position_diff`.
 | Parameter | Type / default | Exact effect |
 | --- | --- | --- |
 | `max_state_age_s` | seconds / `0.10` | Maximum acceptable age of `/motor/state`. A stale state rests all motors and aborts. |
-| `max_abs_hip_error_rad` | radians / `0.35` | Largest allowed measured-motor-minus-commanded-motor error. A breach aborts. It is deliberately not based on reconstructed actual hip angle in strategy 1.9.0. |
+| `max_abs_hip_error_rad` | radians / `0.35` | Largest allowed measured-motor-minus-commanded-motor error. A breach aborts. It is deliberately not based on reconstructed actual hip angle in strategy 2.0.0. |
 | `max_abs_hip_torque_nm` | feedback units / `400` | Largest allowed absolute hip torque feedback value. A breach aborts. Confirm feedback units on hardware before changing it. |
 
 The runner logs phase changes to the terminal and `launch.log`: startup move,
@@ -573,7 +662,7 @@ Dry run/default preview:
 ros2 launch kilin_hip_characterization characterization.launch.py
 ```
 
-For a real run, first copy and review a profile and create the run directory. Then explicitly provide `armed:=true`, `command_topic:=/motor/command`, and `run_dir:=...`. In strategy 1.9.0, `speed_ik` and `torque_assist` are published only during moving hip phases; hubs are rest otherwise.
+For a real run, first copy and review a profile and create the run directory. Then explicitly provide `armed:=true`, `command_topic:=/motor/command`, and `run_dir:=...`. In strategy 2.0.0, `speed_ik` and `torque_assist` are published only during moving hip phases; hubs are rest otherwise.
 
 ## Offline analysis
 
