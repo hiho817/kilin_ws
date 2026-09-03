@@ -428,8 +428,8 @@ arguments.  The generic launch also has the two arguments marked `generic`.
 | `use_terrain_window` | `false` | `true`, `false` | Replaces analytical terrain with latest live window. | **Yes**. |
 | `terrain_window_topic` | `/kilin/terrain/local_window` | ROS topic | `TerrainWindow` input. | No. |
 | `terrain_window_timeout_s` | `1.0` s | positive seconds | Maximum accepted TerrainWindow age before terrain safety hold. | No without safety review. |
-| `angle_diff_compensation.gain` | `0.0` | non-negative scalar | Adds this fraction of each hip's greatest observed outward `position_diff` to outward motor targets. | Set explicitly only for a documented transmission experiment. |
-| `angle_diff_compensation.maximum_abs_rad` | `0.10` rad | positive radians | Hard per-hip bound on the added compensation. | No without safety review. |
+| `angle_diff_compensation.gain` | `0.0` | non-negative scalar | Subtracts this fraction of each hip's greatest observed outward `position_diff` from outward motor targets. | Set explicitly only for a documented transmission experiment. |
+| `angle_diff_compensation.maximum_abs_rad` | `0.10` rad | positive radians | Hard per-hip bound on the compensation. | No without safety review. |
 | `live_terrain.initial_flat_support.enabled` | `true` | `true`, `false` | Enables fixed initial support seed only. | No without safety review. |
 | `live_terrain.initial_flat_support.rear_m` | `0.65` m | non-negative m | Rear extent of seeded support envelope. | No. |
 | `live_terrain.initial_flat_support.forward_m` | `0.85` m | non-negative m | Forward extent of seeded support envelope. | No. |
@@ -515,9 +515,11 @@ The motor-state absolute sensor reports `position_diff`; for new recordings,
 `angle_diff_compensation.gain: 0.0`, this measurement is recorded but does not
 change a command. With a positive gain, the controller retains each hip's
 greatest observed **outward** difference since node startup (front: most
-negative; rear: most positive) and adds `gain × difference` to an outward
-target only. For example, a front target of -45 degrees with greatest
-`position_diff = -2 degrees` and gain 0.4 becomes -45.8 degrees. Inward
-targets receive no bias, and the addition is bounded by
+negative; rear: most positive) and subtracts `gain × difference` from an
+outward motor-side target only. For example, a front desired angle of -45
+degrees with greatest `position_diff = -2 degrees` and gain 0.4 commands
+-44.2 degrees on the motor side. With an unchanged -2 degree difference, the
+physical angle is then -46.2 degrees rather than the uncompensated -47
+degrees. Inward targets receive no bias, and the compensation is bounded by
 `angle_diff_compensation.maximum_abs_rad`. This is an experimental transmission
 compensation, not a force/contact estimate; retain a gain-zero baseline.

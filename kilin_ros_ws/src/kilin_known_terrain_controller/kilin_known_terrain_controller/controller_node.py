@@ -1213,11 +1213,14 @@ class KnownTerrainController(Node):
             outward_sign = np.asarray([-1.0, -1.0, 1.0, 1.0])
             with self._lock:
                 outward_difference = self._greatest_outward_position_diff.copy()
-            # Compensation is deliberately one-sided. Do not add an outward
-            # bias to a target which would move the leg inward.
+            # ``actual_angle = motor_position + position_diff``.  Therefore,
+            # to reduce the physical-angle error relative to the desired hip
+            # angle, subtract a fraction of the measured difference from the
+            # motor-side target.  This remains deliberately one-sided: do not
+            # bias a target which would move the leg inward.
             outward_target = outward_sign * hips > 0.0
             compensation = np.clip(
-                gain * outward_difference,
+                -gain * outward_difference,
                 -maximum_abs_rad,
                 maximum_abs_rad,
             )

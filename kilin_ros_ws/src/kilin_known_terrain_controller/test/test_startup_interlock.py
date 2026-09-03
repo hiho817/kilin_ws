@@ -157,4 +157,6 @@ def test_outward_angle_diff_compensation_uses_greatest_outward_difference_only()
         command.module_c.hip.position,
         command.module_d.hip.position,
     ])
-    np.testing.assert_allclose(hips_deg, [-45.8, -46.2, 46.6, 45.4])
+    # actual_angle = motor_position + position_diff, so the motor-side target
+    # must move inward to counter an outward physical-angle difference.
+    np.testing.assert_allclose(hips_deg, [-44.2, -43.8, 43.4, 44.6])
