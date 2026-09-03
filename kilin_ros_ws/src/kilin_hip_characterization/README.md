@@ -8,7 +8,7 @@ One ROS 2 package for low-level hip-transmission characterization, PID and bound
 - Real actuation requires both `armed:=true` and an explicit real command topic.
 - It sends nothing until `/motor/state` is fresh, then captures current hip and hub feedback as its starting state.
 - New-recording convention is `actual_hip_angle_rad = motor_position + position_diff`.
-- Strategy **2.0.0** commands the raw motor-position reference directly. `position_diff` is never fed back into the position target; the optional lift-assist FF mode uses it only as a bounded, observed loading signal.
+- Strategy **2.1.0** commands the raw motor-position reference directly. `position_diff` is never fed back into the position target; the optional lift-assist FF mode uses it only as a bounded, observed loading signal.
 - `actual_hip_angle_rad` is still reconstructed and recorded for offline transmission/force analysis. Safety aborts on stale state, non-finite state, motor error code, configured hip-torque bound, or configured raw-motor tracking bound. Abort sends all motors to rest.
 
 The package does not modify `kilin_com_estimator`, the terrain planner, or FAST-LIO2.
@@ -38,7 +38,7 @@ control policy requires a new name/version before an experiment is run.
 
 ### Wheel modes
 
-Strategy **2.0.0** has one explicit `wheel_mode`, recorded in the run manifest
+Strategy **2.0.1** has one explicit `wheel_mode`, recorded in the run manifest
 and trace. Hubs are always `rest` during startup, both hold phases, recovery,
 completion, and abort. Wheel commands are active only during the normal A→B
 and B→A moves.
@@ -48,7 +48,7 @@ and B→A moves.
 | `rest` | Hub motor mode `rest`; no active velocity or torque command. | Baseline hip-only test. |
 | `speed_ik` (or alias `speed`) | Hub velocity is calculated live from the commanded hip trajectory at every control tick. | The wheel follows hip motion kinematically; it is never a fixed speed. The command field uses the established RPM-times-ten unit: `hub.velocity = wheel_rate_rad_s × 60 × 10 / (2π)`. |
 | `torque_assist` (or alias `torque`) | Hub torque magnitude is a fixed signed configuration value. The IK wheel rate chooses the reference direction. | Positive values assist `speed_ik`; negative values oppose it. The torque magnitude is **not** calculated from IK. Outward and inward values may differ and are clamped. |
-| `brake` / `position_hold` | Not implemented in 2.0.0. | A profile using either is rejected before commanding hardware. Position hold will require feedback-captured position before it is introduced. |
+| `brake` / `position_hold` | Not implemented in 2.0.1. | A profile using either is rejected before commanding hardware. Position hold will require feedback-captured position before it is introduced. |
 
 For `speed_ik`, IK supplies both the live wheel-rate magnitude and direction.
 For `torque_assist`, IK supplies **only the reference direction**; the signed
@@ -82,7 +82,7 @@ torque, so the bag and compact trace can be cross-checked after every run.
 
 The hardware feedback currently reports hub velocity as zero even while the hub
 is commanded in velocity mode, so velocity feedback is not used to judge a
-wheel condition. Strategy 2.0.0 instead compares the feedback hub-position
+wheel condition. Strategy 2.0.1 instead compares the feedback hub-position
 change with the integrated, sent speed command for every module and every
 A→B/B→A stroke:
 
@@ -121,7 +121,7 @@ The master runner merges `kilin_hip_batch.defaults` with each test's
 | `run_dir` | string / empty | Evidence folder. Required for an armed direct controller invocation; the helpers set it automatically. |
 | `bag_topics` | string list / six base topics | Topics passed to `ros2 bag record` by `single_runner.py` or `batch_runner.py`. Place it in a direct profile's `ros__parameters`, or master `defaults`; a unit-test override may replace it. The helper removes it before passing the resolved profile to the C++ controller and saves the final list as `bag_topics.txt`. |
 | `strategy_name` | string | Human-readable control/analysis strategy name, recorded in the manifest. |
-| `strategy_version` | numeric string | Revision of that strategy, e.g. `2.0.0`, recorded in the manifest. Use `2.0.0` for this raw-motor, wheel-mode-capable controller; do not reuse `1.0.0` compensated-run profiles. |
+| `strategy_version` | numeric string | Revision of that strategy, e.g. `2.1.0`, recorded in the manifest. Use `2.1.0` for this raw-motor, wheel-mode-capable controller; do not reuse `1.0.0` compensated-run profiles. |
 
 ### Test selection and geometry
 
@@ -189,9 +189,11 @@ policies in one run: `angle_diff_lift_assist` ignores every
 | `lift_assist_support_inward_ff_nm` | signed direct command / `0` | Constant physical inward FF in the support region. Positive requests inward assistance; zero disables it; negative deliberately requests outward torque. |
 | `lift_assist_lift_start_inward_ff_nm` | nonnegative direct command / `0` | Initial physical inward FF on entry to the lifted-leg region. |
 | `lift_assist_lift_ramp_nm_s` | nonnegative direct command per second / `0` | Rate at which lifted-leg inward FF increases while the lift condition remains true. |
-| `lift_assist_lift_max_inward_ff_nm` | nonnegative direct command / `0` | Cap for the lifted-leg ramp. It must be at least `lift_assist_lift_start_inward_ff_nm`; the global `max_abs_hip_ff_torque_nm` clamp still applies. |
+| `lift_assist_lift_max_inward_ff_nm` | nonnegative direct command / `0` | Optional cap for the lifted-leg ramp. `0` means use `max_abs_hip_ff_torque_nm`, so changing only the lift-start value is valid. A nonzero cap must be at least `lift_assist_lift_start_inward_ff_nm`. |
+| `lift_assist_apply_rate_nm_s` | nonnegative direct command per second / `0` | Maximum upward change of applied physical inward FF. `0` disables this limit and applies the target immediately. |
+| `lift_assist_release_rate_nm_s` | nonnegative direct command per second / `0` | Maximum downward change of applied physical inward FF when returning toward support. `0` disables this limit and applies the target immediately. |
 
-#### Angle-difference lift-assist policy (strategy 2.0.0)
+#### Angle-difference lift-assist policy (strategy 2.1.0)
 
 For each module, the raw recorded difference is
 
@@ -228,11 +230,24 @@ F_l(t), & z_i\ge z_{\mathrm{lift},i},
 {z_{\mathrm{lift},i}-z_{\mathrm{support},i}}.
 $$
 
-The lift timer resets whenever $z_i<z_{\mathrm{lift},i}$. There are no
-unused outer extrema or hidden error, velocity, dwell, or release gates in
-this mode.  The trace records `lift_assist_normalized_diff_rad`, physical
-request `lift_assist_physical_inward_ff`, lift dwell, activity, and the final
-motor command `commanded_hip_ff`.
+The two thresholds are also a lift latch: it enters at
+$z_i\ge z_{\mathrm{lift},i}$ and does not reset accumulated lift strength
+until $z_i\le z_{\mathrm{support},i}$. Thus brief recontact movement through
+the blend zone cannot repeatedly restart the lift timer. The computed physical
+target is then rate limited into the applied request:
+
+$$
+F_{k+1}=\operatorname{clip}
+\left(F_{\mathrm{target}},\;
+F_k-r_{\mathrm{release}}\Delta t,\;
+F_k+r_{\mathrm{apply}}\Delta t\right).
+$$
+
+Set either rate to zero to disable that side of the limit. The trace records
+`lift_assist_normalized_diff_rad`, target
+`lift_assist_target_inward_ff`, applied physical request
+`lift_assist_physical_inward_ff`, lift dwell, latch state, activity, and the
+final motor command `commanded_hip_ff`.
 
 Profile values use a physical convention: positive means inward. The runner
 maps that request to motor torque as
@@ -254,7 +269,7 @@ Minimal inert example; change one zero-valued torque parameter at a time:
 
 ```yaml
 strategy_name: angle_diff_lift_assist_screen
-strategy_version: 2.0.0
+strategy_version: 2.1.0
 feedforward_mode: angle_diff_lift_assist
 lift_assist_support_region_end_rad: [-0.0174533, -0.0174533, -0.0174533, -0.0174533]
 lift_assist_lift_region_start_rad: [0.0174533, 0.0174533, 0.0174533, 0.0174533]
@@ -262,6 +277,8 @@ lift_assist_support_inward_ff_nm: 0.0
 lift_assist_lift_start_inward_ff_nm: 0.0
 lift_assist_lift_ramp_nm_s: 0.0
 lift_assist_lift_max_inward_ff_nm: 0.0
+lift_assist_apply_rate_nm_s: 0.0
+lift_assist_release_rate_nm_s: 0.0
 ```
 
 ### Near-zero breakaway policy (strategy 1.9.1)
