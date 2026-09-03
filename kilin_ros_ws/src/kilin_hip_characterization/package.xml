@@ -6,6 +6,9 @@
   <maintainer email="ian20030201@gmail.com">Kilin research team</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <build_depend>pybind11-dev</build_depend>
+  <exec_depend>python3</exec_depend>
   <depend>rclcpp</depend>
   <depend>kilin_msgs</depend>
   <export><build_type>ament_cmake</build_type></export>
