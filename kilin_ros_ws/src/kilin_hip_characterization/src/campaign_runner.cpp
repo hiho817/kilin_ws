@@ -48,7 +48,7 @@ class CampaignRunner final : public rclcpp::Node {
     state_topic_ = declare_parameter<std::string>("state_topic", "/motor/state");
     run_dir_ = declare_parameter<std::string>("run_dir", "");
     strategy_name_ = declare_parameter<std::string>("strategy_name", "phase_a_two_state_baseline");
-    strategy_version_ = declare_parameter<std::string>("strategy_version", "2.5.0");
+    strategy_version_ = declare_parameter<std::string>("strategy_version", "2.6.0");
     active_modules_ = declare_parameter<std::vector<std::string>>("active_modules", {"A", "B"});
     repetitions_ = declare_parameter<int>("repetitions", 3);
     motion_mode_ = declare_parameter<std::string>("motion_mode", "two_state_cycle");
@@ -89,6 +89,8 @@ class CampaignRunner final : public rclcpp::Node {
     lift_assist_support_inward_ff_ = declare_parameter<double>("lift_assist_support_inward_ff_nm", 0.0);
     lift_assist_lift_start_inward_ff_ = declare_parameter<double>("lift_assist_lift_start_inward_ff_nm", 0.0);
     lift_assist_lift_ramp_ = declare_parameter<double>("lift_assist_lift_ramp_nm_s", 0.0);
+    lift_assist_lift_ramp_up_ = declare_parameter<double>("lift_assist_lift_ramp_up_nm_s", -1.0);
+    lift_assist_lift_ramp_down_ = declare_parameter<double>("lift_assist_lift_ramp_down_nm_s", -1.0);
     lift_assist_lift_max_inward_ff_ = declare_parameter<double>("lift_assist_lift_max_inward_ff_nm", 0.0);
     lift_assist_apply_rate_ = declare_parameter<double>("lift_assist_apply_rate_nm_s", 0.0);
     lift_assist_release_rate_ = declare_parameter<double>("lift_assist_release_rate_nm_s", 0.0);
@@ -177,11 +179,13 @@ class CampaignRunner final : public rclcpp::Node {
     }
     if (lift_assist_mode) {
       if (lift_assist_lift_start_inward_ff_ < 0.0 || lift_assist_lift_ramp_ < 0.0 ||
+          (lift_assist_lift_ramp_up_ < 0.0 && lift_assist_lift_ramp_up_ != -1.0) ||
+          (lift_assist_lift_ramp_down_ < 0.0 && lift_assist_lift_ramp_down_ != -1.0) ||
           lift_assist_apply_rate_ < 0.0 || lift_assist_release_rate_ < 0.0 ||
           lift_assist_lift_max_inward_ff_ < 0.0 ||
           (lift_assist_lift_max_inward_ff_ > 0.0 &&
            lift_assist_lift_max_inward_ff_ < lift_assist_lift_start_inward_ff_)) {
-        throw std::runtime_error("invalid angle_diff_lift_assist: lift start, ramp, apply rate, and release rate must be nonnegative; lift maximum must be zero (use global FF clamp) or at least the lift start");
+        throw std::runtime_error("invalid angle_diff_lift_assist: lift start/rates and apply/release rates must be nonnegative; directional lift ramps may be -1 only for legacy fallback; lift maximum must be zero (use global FF clamp) or at least lift start");
       }
       if (lift_assist_pid_schedule_enabled_ &&
           (!std::isfinite(lift_assist_support_kp_) || !std::isfinite(lift_assist_support_ki_) ||
@@ -672,23 +676,30 @@ class CampaignRunner final : public rclcpp::Node {
     state.last_update_s = time_s;
     const double policy_lift_cap = lift_assist_lift_max_inward_ff_ > 0.0
         ? lift_assist_lift_max_inward_ff_ : max_ff_;
+    const double lift_ramp_up = directionalRate(lift_assist_lift_ramp_up_, lift_assist_lift_ramp_);
 
     if (normalized_diff >= lift_start) {
       if (!state.lift_latched) {
         state.lift_latched = true;
         state.dwell_s = 0.0;
-        state.held_lift_inward_ff = lift_assist_lift_start_inward_ff_;
+        state.held_lift_inward_ff = std::clamp(state.held_lift_inward_ff,
+                                                lift_assist_lift_start_inward_ff_, policy_lift_cap);
       }
       state.dwell_s += dt_s;
-      state.held_lift_inward_ff = std::min(lift_assist_lift_start_inward_ff_ +
-                                                lift_assist_lift_ramp_ * state.dwell_s,
-                                            policy_lift_cap);
+      state.held_lift_inward_ff = std::min(policy_lift_cap,
+                                            state.held_lift_inward_ff + lift_ramp_up * dt_s);
     } else if (normalized_diff <= support_end) {
       // The two existing thresholds form the lift latch. A transient crossing
       // below the lift-entry boundary cannot reset accumulated lift strength.
       state.lift_latched = false;
       state.dwell_s = 0.0;
-      state.held_lift_inward_ff = lift_assist_lift_start_inward_ff_;
+      if (lift_assist_lift_ramp_down_ < 0.0) {
+        // Legacy profiles reset stored lift strength immediately on support.
+        state.held_lift_inward_ff = lift_assist_lift_start_inward_ff_;
+      } else {
+        state.held_lift_inward_ff = std::max(lift_assist_lift_start_inward_ff_,
+            state.held_lift_inward_ff - lift_assist_lift_ramp_down_ * dt_s);
+      }
     }
 
     const double lift_target = state.lift_latched ? state.held_lift_inward_ff : lift_assist_lift_start_inward_ff_;
@@ -834,6 +845,8 @@ class CampaignRunner final : public rclcpp::Node {
              << "\nlift_assist_support_inward_ff_nm: " << lift_assist_support_inward_ff_
              << "\nlift_assist_lift_start_inward_ff_nm: " << lift_assist_lift_start_inward_ff_
              << "\nlift_assist_lift_ramp_nm_s: " << lift_assist_lift_ramp_
+             << "\nlift_assist_lift_ramp_up_nm_s: " << lift_assist_lift_ramp_up_
+             << "\nlift_assist_lift_ramp_down_nm_s: " << lift_assist_lift_ramp_down_
              << "\nlift_assist_lift_max_inward_ff_nm: " << lift_assist_lift_max_inward_ff_
              << "\nlift_assist_apply_rate_nm_s: " << lift_assist_apply_rate_
              << "\nlift_assist_release_rate_nm_s: " << lift_assist_release_rate_
@@ -914,7 +927,7 @@ class CampaignRunner final : public rclcpp::Node {
   std::array<HubTravelState, 4> hub_travel_{};
   std::array<double, 4> commanded_{}, move_start_{}, previous_target_{}, commanded_hub_velocity_rpm10_{}, commanded_hub_torque_{}, commanded_hip_ff_{}, commanded_static_breakaway_ff_{}, raw_hip_velocity_trace_{}, filtered_hip_velocity_{}, breakaway_velocity_used_trace_{}, breakaway_dwell_trace_{}, lift_assist_normalized_diff_trace_{}, lift_assist_target_inward_ff_trace_{}, lift_assist_physical_inward_ff_trace_{}, lift_assist_dwell_trace_{}, lift_assist_pid_blend_trace_{}, scheduled_target_kp_trace_{}, scheduled_target_ki_trace_{}, scheduled_target_kd_trace_{}, scheduled_kp_trace_{}, scheduled_ki_trace_{}, scheduled_kd_trace_{};
   std::array<int, 4> commanded_hub_mode_{}, breakaway_released_trace_{}, lift_assist_active_trace_{}, lift_assist_latched_trace_{};
-  double lift_assist_support_inward_ff_{0.0}, lift_assist_lift_start_inward_ff_{0.0}, lift_assist_lift_ramp_{0.0}, lift_assist_lift_max_inward_ff_{0.0}, lift_assist_apply_rate_{0.0}, lift_assist_release_rate_{0.0};
+  double lift_assist_support_inward_ff_{0.0}, lift_assist_lift_start_inward_ff_{0.0}, lift_assist_lift_ramp_{0.0}, lift_assist_lift_ramp_up_{-1.0}, lift_assist_lift_ramp_down_{-1.0}, lift_assist_lift_max_inward_ff_{0.0}, lift_assist_apply_rate_{0.0}, lift_assist_release_rate_{0.0};
   bool lift_assist_pid_schedule_enabled_{false};
   double lift_assist_support_kp_{0.0}, lift_assist_support_ki_{0.0}, lift_assist_support_kd_{0.0}, lift_assist_lift_kp_{0.0}, lift_assist_lift_ki_{0.0}, lift_assist_lift_kd_{0.0}, lift_assist_pid_kp_rate_{0.0}, lift_assist_pid_ki_rate_{0.0}, lift_assist_pid_kd_rate_{0.0}, kp_to_lift_rate_{-1.0}, kp_to_support_rate_{-1.0}, ki_to_lift_rate_{-1.0}, ki_to_support_rate_{-1.0}, kd_to_lift_rate_{-1.0}, kd_to_support_rate_{-1.0};
   bool hub_travel_validation_enabled_{true};

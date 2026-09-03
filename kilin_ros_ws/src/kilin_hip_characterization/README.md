@@ -8,7 +8,7 @@ One ROS 2 package for low-level hip-transmission characterization, PID and bound
 - Real actuation requires both `armed:=true` and an explicit real command topic.
 - It sends nothing until `/motor/state` is fresh, then captures current hip and hub feedback as its starting state.
 - New-recording convention is `actual_hip_angle_rad = motor_position + position_diff`.
-- Strategy **2.5.0** commands the raw motor-position reference directly. `position_diff` is never fed back into the position target; the optional lift-assist FF mode and PID schedule use it only as a bounded, observed loading signal.
+- Strategy **2.6.0** commands the raw motor-position reference directly. `position_diff` is never fed back into the position target; the optional lift-assist FF mode and PID schedule use it only as a bounded, observed loading signal.
 - `actual_hip_angle_rad` is still reconstructed and recorded for offline transmission/force analysis. Safety aborts on stale state, non-finite state, motor error code, configured hip-torque bound, or configured raw-motor tracking bound. Abort sends all motors to rest.
 
 The package does not modify `kilin_com_estimator`, the terrain planner, or FAST-LIO2.
@@ -121,7 +121,7 @@ The master runner merges `kilin_hip_batch.defaults` with each test's
 | `run_dir` | string / empty | Evidence folder. Required for an armed direct controller invocation; the helpers set it automatically. |
 | `bag_topics` | string list / six base topics | Topics passed to `ros2 bag record` by `single_runner.py` or `batch_runner.py`. Place it in a direct profile's `ros__parameters`, or master `defaults`; a unit-test override may replace it. The helper removes it before passing the resolved profile to the C++ controller and saves the final list as `bag_topics.txt`. |
 | `strategy_name` | string | Human-readable control/analysis strategy name, recorded in the manifest. |
-| `strategy_version` | numeric string | Revision of that strategy, e.g. `2.5.0`, recorded in the manifest. Use `2.5.0` for this raw-motor, wheel-mode-capable controller; do not reuse `1.0.0` compensated-run profiles. |
+| `strategy_version` | numeric string | Revision of that strategy, e.g. `2.6.0`, recorded in the manifest. Use `2.6.0` for this raw-motor, wheel-mode-capable controller; do not reuse `1.0.0` compensated-run profiles. |
 
 ### Test selection and geometry
 
@@ -188,7 +188,9 @@ policies in one run: `angle_diff_lift_assist` ignores every
 | `lift_assist_lift_region_start_rad` | four rad / `[0.01745,…]` | Per-module normalized-difference lower boundary of the lifted-leg region. Must be positive and greater than the support-region end. Example: `+0.01745` rad is about +1°. |
 | `lift_assist_support_inward_ff_nm` | signed direct command / `0` | Constant physical inward FF in the support region. Positive requests inward assistance; zero disables it; negative deliberately requests outward torque. |
 | `lift_assist_lift_start_inward_ff_nm` | nonnegative direct command / `0` | Initial physical inward FF on entry to the lifted-leg region. |
-| `lift_assist_lift_ramp_nm_s` | nonnegative direct command per second / `0` | Rate at which lifted-leg inward FF increases while the lift condition remains true. |
+| `lift_assist_lift_ramp_nm_s` | nonnegative direct command per second / `0` | Legacy one-way lift-strength ramp. It remains a fallback only when the two directional ramp keys are omitted. |
+| `lift_assist_lift_ramp_up_nm_s` | nonnegative direct command per second / `0` | Rate at which stored lifted-leg inward strength accumulates while the leg remains in the lift region. |
+| `lift_assist_lift_ramp_down_nm_s` | nonnegative direct command per second / `0` | Rate at which stored lifted-leg inward strength decays toward its start value after confirmed support. `0` preserves that stored strength; it does not alter the applied-output release rate. |
 | `lift_assist_lift_max_inward_ff_nm` | nonnegative direct command / `0` | Optional cap for the lifted-leg ramp. `0` means use `max_abs_hip_ff_torque_nm`, so changing only the lift-start value is valid. A nonzero cap must be at least `lift_assist_lift_start_inward_ff_nm`. |
 | `lift_assist_apply_rate_nm_s` | nonnegative direct command per second / `0` | Maximum upward change of applied physical inward FF. `0` disables this limit and applies the target immediately. |
 | `lift_assist_release_rate_nm_s` | nonnegative direct command per second / `0` | Maximum downward change of applied physical inward FF when returning toward support. `0` disables this limit and applies the target immediately. |
@@ -201,7 +203,7 @@ policies in one run: `angle_diff_lift_assist` ignores every
 | `ki_to_lift_rate_per_s`, `ki_to_support_rate_per_s` | nonnegative Ki units/s / `0` | Independent Ki limits for the two loading transitions. Keep both zero while Ki is not being tested. |
 | `kd_to_lift_rate_per_s`, `kd_to_support_rate_per_s` | nonnegative Kd units/s / `0` | Independent Kd limits for the two loading transitions. |
 
-#### Angle-difference lift-assist policy (strategy 2.5.0)
+#### Angle-difference lift-assist policy (strategy 2.6.0)
 
 For each module, the raw recorded difference is
 
@@ -219,10 +221,10 @@ module.  The profile thresholds are applied to $z_i$, not directly to raw
 
 $$z_{\mathrm{support},i}<0<z_{\mathrm{lift},i}.$$
 
-Let $F_s$ be `lift_assist_support_inward_ff_nm`. Let the lifted-leg FF grow
-only while $z_i\ge z_{\mathrm{lift},i}$:
+Let $F_s$ be `lift_assist_support_inward_ff_nm`. Let the stored lifted-leg
+strength grow only while $z_i\ge z_{\mathrm{lift},i}$:
 
-$$F_l(t)=\min(F_{l,0}+r_l t,F_{l,\max}).$$
+$$F_l(t+\Delta t)=\min(F_l(t)+r_{\mathrm{up}}\Delta t,F_{l,\max}).$$
 
 The physical inward request is
 
@@ -241,8 +243,15 @@ $$
 The two thresholds are also a lift latch: it enters at
 $z_i\ge z_{\mathrm{lift},i}$ and does not reset accumulated lift strength
 until $z_i\le z_{\mathrm{support},i}$. Thus brief recontact movement through
-the blend zone cannot repeatedly restart the lift timer. The computed physical
-target is then rate limited into the applied request:
+the blend zone cannot repeatedly restart the lift timer. After confirmed
+support, stored strength decays independently as
+
+$$F_l(t+\Delta t)=\max(F_{l,0},F_l(t)-r_{\mathrm{down}}\Delta t).$$
+
+Here $r_{\mathrm{up}}$ and $r_{\mathrm{down}}$ are
+`lift_assist_lift_ramp_up_nm_s` and `_down_nm_s`. This stored-strength decay
+is distinct from the applied torque. The computed physical target is then rate
+limited into the applied request:
 
 $$
 F_{k+1}=\operatorname{clip}
@@ -318,13 +327,15 @@ Minimal inert example; change one zero-valued torque parameter at a time:
 
 ```yaml
 strategy_name: angle_diff_lift_assist_screen
-strategy_version: 2.5.0
+strategy_version: 2.6.0
 feedforward_mode: angle_diff_lift_assist
 lift_assist_support_region_end_rad: [-0.0174533, -0.0174533, -0.0174533, -0.0174533]
 lift_assist_lift_region_start_rad: [0.0174533, 0.0174533, 0.0174533, 0.0174533]
 lift_assist_support_inward_ff_nm: 0.0
 lift_assist_lift_start_inward_ff_nm: 0.0
 lift_assist_lift_ramp_nm_s: 0.0
+lift_assist_lift_ramp_up_nm_s: 0.0
+lift_assist_lift_ramp_down_nm_s: 0.0
 lift_assist_lift_max_inward_ff_nm: 0.0
 lift_assist_apply_rate_nm_s: 0.0
 lift_assist_release_rate_nm_s: 0.0

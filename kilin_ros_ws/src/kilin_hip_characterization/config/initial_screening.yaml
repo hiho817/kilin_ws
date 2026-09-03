@@ -7,7 +7,7 @@ kilin_hip_characterization:
     state_topic: /motor/state
     run_dir: ""
     strategy_name: phase_a_two_state_baseline
-    strategy_version: 2.5.0
+    strategy_version: 2.6.0
     repetitions: 3
     active_modules: [A, B]
     motion_mode: two_state_cycle
@@ -36,6 +36,11 @@ kilin_hip_characterization:
     lift_assist_support_inward_ff_nm: 0.0
     lift_assist_lift_start_inward_ff_nm: 0.0
     lift_assist_lift_ramp_nm_s: 0.0
+    # Directional stored-lift-strength ramps. New profiles use these; the
+    # legacy ramp above remains a fallback for older profiles. Zero means no
+    # accumulation/decay in that direction.
+    lift_assist_lift_ramp_up_nm_s: 0.0
+    lift_assist_lift_ramp_down_nm_s: 0.0
     # Zero means no policy-specific cap: use max_abs_hip_ff_torque_nm.
     lift_assist_lift_max_inward_ff_nm: 0.0
     # Zero disables each rate limit and retains direct target output. Set both
@@ -51,7 +56,7 @@ kilin_hip_characterization:
     lift_assist_lift_kp: 360.0
     lift_assist_lift_ki: 0.0
     lift_assist_lift_kd: 5.0
-    # Legacy symmetric limits. Keep at zero for new 2.5.0 profiles and use the
+    # Legacy symmetric limits. Keep at zero for new 2.6.0 profiles and use the
     # direction-specific limits below instead.
     lift_assist_pid_kp_rate_per_s: 0.0
     lift_assist_pid_ki_rate_per_s: 0.0
