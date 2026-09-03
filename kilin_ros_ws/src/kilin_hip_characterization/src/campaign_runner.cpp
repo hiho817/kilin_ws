@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "rclcpp/rclcpp.hpp"
+#include "kilin_hip_characterization/hip_control_strategy.hpp"
 #include "kilin_msgs/msg/leg_cmd.hpp"
 #include "kilin_msgs/msg/motor_cmd_stamped.hpp"
 #include "kilin_msgs/msg/motor_state_stamped.hpp"
@@ -218,6 +219,33 @@ class CampaignRunner final : public rclcpp::Node {
     for (const auto &name : active_modules_) {
       if (std::find(kModuleNames.begin(), kModuleNames.end(), name) == kModuleNames.end()) throw std::runtime_error("unknown active module");
     }
+    kilin_hip_characterization::HipControlStrategyConfig fine_tune_config;
+    fine_tune_config.enabled = lift_assist_mode;
+    fine_tune_config.pid_schedule_enabled = lift_assist_pid_schedule_enabled_;
+    std::copy_n(lift_assist_support_region_end_.begin(), 4, fine_tune_config.support_end.begin());
+    std::copy_n(lift_assist_lift_region_start_.begin(), 4, fine_tune_config.lift_start.begin());
+    fine_tune_config.support_kp = lift_assist_support_kp_;
+    fine_tune_config.support_ki = lift_assist_support_ki_;
+    fine_tune_config.support_kd = lift_assist_support_kd_;
+    fine_tune_config.lift_kp = lift_assist_lift_kp_;
+    fine_tune_config.lift_ki = lift_assist_lift_ki_;
+    fine_tune_config.lift_kd = lift_assist_lift_kd_;
+    fine_tune_config.lift_start_inward_ff = lift_assist_lift_start_inward_ff_;
+    fine_tune_config.lift_max_inward_ff = lift_assist_lift_max_inward_ff_;
+    fine_tune_config.lift_ramp_up_nm_s = directionalRate(lift_assist_lift_ramp_up_, lift_assist_lift_ramp_);
+    fine_tune_config.lift_ramp_down_nm_s = std::max(0.0, lift_assist_lift_ramp_down_);
+    fine_tune_config.reset_lift_on_support = lift_assist_lift_ramp_down_ < 0.0;
+    fine_tune_config.support_inward_ff = lift_assist_support_inward_ff_;
+    fine_tune_config.apply_rate_nm_s = lift_assist_apply_rate_;
+    fine_tune_config.release_rate_nm_s = lift_assist_release_rate_;
+    fine_tune_config.max_abs_ff = max_ff_;
+    fine_tune_config.kp_to_lift_rate_per_s = directionalRate(kp_to_lift_rate_, lift_assist_pid_kp_rate_);
+    fine_tune_config.kp_to_support_rate_per_s = directionalRate(kp_to_support_rate_, lift_assist_pid_kp_rate_);
+    fine_tune_config.ki_to_lift_rate_per_s = directionalRate(ki_to_lift_rate_, lift_assist_pid_ki_rate_);
+    fine_tune_config.ki_to_support_rate_per_s = directionalRate(ki_to_support_rate_, lift_assist_pid_ki_rate_);
+    fine_tune_config.kd_to_lift_rate_per_s = directionalRate(kd_to_lift_rate_, lift_assist_pid_kd_rate_);
+    fine_tune_config.kd_to_support_rate_per_s = directionalRate(kd_to_support_rate_, lift_assist_pid_kd_rate_);
+    fine_tune_strategy_.configure(fine_tune_config);
     publisher_ = create_publisher<kilin_msgs::msg::MotorCmdStamped>(command_topic_, 10);
     subscriber_ = create_subscription<kilin_msgs::msg::MotorStateStamped>(state_topic_, rclcpp::QoS(20).best_effort(), std::bind(&CampaignRunner::onState, this, std::placeholders::_1));
     timer_ = create_wall_timer(std::chrono::milliseconds(10), std::bind(&CampaignRunner::tick, this));
@@ -527,8 +555,16 @@ class CampaignRunner final : public rclcpp::Node {
       // the state/logging path as the reconstructed actual hip angle, but it is
       // not part of this low-level position-control loop.
       legs[i].hip.position = safe_target;
-      const ScheduledPid pid_target = scheduledPid(i, safe_target);
-      const ScheduledPid pid = applyScheduledPidRateLimit(i, pid_target, dt_s);
+      const bool shared_fine_tune = feedforward_mode_ == "angle_diff_lift_assist";
+      const auto fine_tune = fine_tune_strategy_.update({
+        i, hips_[i].motor, hips_[i].diff, safe_target, command_time.seconds(),
+        active(i), allow_ff, inLiftAssistOutwardRange(i, safe_target) &&
+        inLiftAssistOutwardRange(i, hips_[i].motor), kp_, ki_, kd_});
+      const ScheduledPid pid_target = shared_fine_tune ?
+        ScheduledPid{fine_tune.kp, fine_tune.ki, fine_tune.kd, fine_tune.pid_blend} :
+        scheduledPid(i, safe_target);
+      const ScheduledPid pid = shared_fine_tune ? pid_target :
+        applyScheduledPidRateLimit(i, pid_target, dt_s);
       legs[i].hip.kp = pid.kp; legs[i].hip.ki = pid.ki; legs[i].hip.kd = pid.kd;
       lift_assist_pid_blend_trace_[i] = pid.blend;
       scheduled_target_kp_trace_[i] = pid_target.kp;
@@ -539,7 +575,16 @@ class CampaignRunner final : public rclcpp::Node {
       scheduled_kd_trace_[i] = pid.kd;
       raw_hip_velocity_trace_[i] = hips_[i].velocity;
       breakaway_velocity_used_trace_[i] = breakawayVelocity(i);
-      commanded_hip_ff_[i] = allow_ff ? feedforward(i, safe_target - hips_[i].motor) : 0.0;
+      commanded_hip_ff_[i] = shared_fine_tune ? fine_tune.motor_ff :
+        (allow_ff ? feedforward(i, safe_target - hips_[i].motor) : 0.0);
+      if (shared_fine_tune) {
+        lift_assist_normalized_diff_trace_[i] = fine_tune.valid ? fine_tune.normalized_diff : NAN;
+        lift_assist_target_inward_ff_trace_[i] = fine_tune.target_inward_ff;
+        lift_assist_physical_inward_ff_trace_[i] = fine_tune.applied_inward_ff;
+        lift_assist_dwell_trace_[i] = fine_tune.lift_dwell_s;
+        lift_assist_active_trace_[i] = fine_tune.valid ? 1 : 0;
+        lift_assist_latched_trace_[i] = fine_tune.lift_latched ? 1 : 0;
+      }
       if (!allow_ff) {
         commanded_static_breakaway_ff_[i] = 0.0;
         breakaway_dwell_trace_[i] = 0.0;
@@ -922,6 +967,7 @@ class CampaignRunner final : public rclcpp::Node {
   std::array<HipState, 4> hips_{};
   std::array<HubState, 4> hubs_{};
   std::array<BreakawayState, 4> breakaway_{};
+  kilin_hip_characterization::HipControlStrategy fine_tune_strategy_{};
   std::array<LiftAssistState, 4> lift_assist_{};
   std::array<AppliedScheduledPid, 4> applied_scheduled_pid_{};
   std::array<HubTravelState, 4> hub_travel_{};
