@@ -5,6 +5,75 @@ Kilin Joystick is a small ROS 2 node that reads a joystick (via the `joy` packag
 This package provides:
 - `kilin_joystick` node (C++): reads `/joy` and publishes `/kilin/cmd_vel`.
 - A composable launch file (`launch/launch.py`) that starts `joy_node`, `kilin_joystick`, and `kilin_cmd_converter` together.
+- `kilin_keyboard` node (C++) and `keyboard.launch.py` for keyboard control in a local or RDP desktop window (SDL2).
+
+## Keyboard control
+
+Build once from `~/kilin_ws/kilin_ros_ws`:
+
+```zsh
+source /opt/ros/humble/setup.zsh
+source install/setup.zsh
+colcon build --packages-select kilin_joystick --symlink-install
+source install/setup.zsh
+ros2 launch kilin_joystick keyboard.launch.py
+```
+
+Run the launch command in the Isaac Sim computer's graphical desktop/RDP session,
+then click the **Kilin keyboard control window** to give it focus. No ROS installation
+on the Mac or joystick network bridge is needed. SDL2 receives key-down and key-up
+events, allowing true simultaneous keys without relying on terminal key repeat.
+A display session is required; plain headless SSH is not supported.
+
+| Keys | Action |
+| --- | --- |
+| Up arrow | Forward (`linear.x > 0`) |
+| Down arrow | Backward (`linear.x < 0`) |
+| Left arrow | Strafe left (`linear.y > 0`) |
+| Right arrow | Strafe right (`linear.y < 0`) |
+| Up + Left / Up + Right | Forward-left / forward-right |
+| Down + Left / Down + Right | Backward-left / backward-right |
+| Q / E | Rotate left / right (`angular.z`); can combine with arrow keys |
+| Space / X | Stop; release all movement/rotation and stop keys before resuming |
+| Esc / close window / Ctrl+C | Stop and exit |
+
+WASD is disabled. Holding opposite arrow keys cancels that axis; Q+E cancels rotation.
+Diagonal components are normalized so total translation speed stays at `vmax`, the
+same as straight motion (each diagonal component is `vmax / sqrt(2)`). Release one
+arrow from a diagonal to continue along the remaining axis. Release all control
+keys to stop. Losing window focus, hiding, or minimizing the window clears held
+keys and publishes zero. After focus returns, press keys again to resume. The
+3x3 pad shows translation direction, with rotation indicators on either side;
+the title shows current velocity.
+
+The node publishes `geometry_msgs/msg/Twist` on **`/kilin/cmd_vel`** at 100 Hz.
+There is no terminal timeout or `key_timeout` argument: actual key-release events
+control stopping. RDP must deliver key-up or window-focus events to stop on a
+remote disconnect; this is not a replacement for a downstream command watchdog.
+
+Optional speed arguments:
+
+```zsh
+ros2 launch kilin_joystick keyboard.launch.py vmax:=0.3 wmax:=1.0
+```
+
+This launch starts `kilin_keyboard` and `kilin_cmd_converter`; it does not start
+`joy_node`, `kilin_joystick`, or Isaac Sim. Do not run another velocity controller
+(including the joystick launch) at the same time. Keyboard control covers base
+velocity only; it does not publish the joystick's brake, hip, or rest-mask controls.
+
+For Isaac Sim, in a second terminal with the same ROS/workspace environment:
+
+```zsh
+ros2 launch isaac_bridge launch.py start_cmd_converter:=false
+```
+
+If another launch already starts `kilin_cmd_converter`, disable the keyboard
+launch's copy with `start_cmd_converter:=false`. To run only the keyboard node:
+
+```zsh
+ros2 run kilin_joystick kilin_keyboard
+```
 
 ## Features
 - Deadzone handling and rescaling so joystick output is mapped smoothly from deadzone..1.0 to 0..1.0

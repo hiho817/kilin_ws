@@ -12,6 +12,7 @@ find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(SDL2 REQUIRED)
 
 # ----------------------------------------
 # Build executable
@@ -25,11 +26,16 @@ ament_target_dependencies(kilin_joystick
   geometry_msgs
 )
 
+add_executable(kilin_keyboard src/kilin_keyboard.cpp)
+ament_target_dependencies(kilin_keyboard rclcpp geometry_msgs)
+target_link_libraries(kilin_keyboard SDL2::SDL2)
+
 # ----------------------------------------
 # Install targets
 # ----------------------------------------
 install(TARGETS
   kilin_joystick
+  kilin_keyboard
   DESTINATION lib/${PROJECT_NAME}
 )
 
