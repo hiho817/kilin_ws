@@ -703,9 +703,9 @@ private:
     }
     leg.hip.position = hip_deg * M_PI / 180.0;
     leg.hip.motor_mode = 4;
-    leg.hip.kp = 350.0;
+    leg.hip.kp = 440.0;
     leg.hip.ki = 0.0;
-    leg.hip.kd = 5.0;
+    leg.hip.kd = 25.0;
     leg.steering.position = lerp(t, p0.time, p1.time, steer0, steer1) * M_PI / 180.0;
     leg.steering.motor_mode = 4;
     leg.hub.velocity = hub_velocity;
